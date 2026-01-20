@@ -1,0 +1,18 @@
+# Bazel
+bazel-*
+bazel-bin/
+bazel-out/
+bazel-testlogs/
+
+# Build
+build/
+install/
+
+# Logs
+*.log
+
+# IDE
+.vscode/
+
+# OS
+.DS_Store

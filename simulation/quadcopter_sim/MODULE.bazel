@@ -1,0 +1,11 @@
+module(name = "quadcopter_sim")
+
+bazel_dep(name = "drake", version = "")
+
+local_path_override(
+    module_name = "drake",
+    path = "/home/zirgham/drake",
+)
+
+drake_dep_ext = use_extension("@drake//tools/workspace:default.bzl", "drake_dep_repositories")
+use_repo(drake_dep_ext, "eigen", "fmt")

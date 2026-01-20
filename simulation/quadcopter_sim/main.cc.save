@@ -1,0 +1,13 @@
+zirgham@zirgham-HP-Envy-Laptop-17t-cw100:~/drake_projects/quadcopter_sim$ bazel build //:quadcopter
+INFO: Analyzed target //:quadcopter (0 packages loaded, 0 targets configured).
+ERROR: /home/zirgham/drake_projects/quadcopter_sim/BUILD.bazel:1:10: Linking quadcopter failed: (Exit 1): gcc failed: error executing CppLink command (from target //:quadcopter) /usr/bin/gcc @bazel-out/k8-fastbuild/bin/quadcopter-0.params
+
+Use --sandbox_debug to see verbose messages from the sandbox and retain the sandbox build root for debugging
+/usr/lib/gcc/x86_64-linux-gnu/11/../../../x86_64-linux-gnu/Scrt1.o:function _start: error: undefined reference to 'main'
+collect2: error: ld returned 1 exit status
+Target //:quadcopter failed to build
+Use --verbose_failures to see the command lines of failed build steps.
+INFO: Elapsed time: 46.071s, Critical Path: 42.32s
+INFO: 3 processes: 2 internal, 1 linux-sandbox.
+ERROR: Build did NOT complete successfully
+zirgham@zirgham-HP-Envy-Laptop-17t-cw100:~/drake_projects/quadcopter_sim$ 

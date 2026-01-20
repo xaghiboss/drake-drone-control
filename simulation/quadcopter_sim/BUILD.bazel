@@ -1,0 +1,24 @@
+cc_binary(
+    name = "quadcopter",
+    srcs = [
+        "main.cc",
+        "quadcopter_controller.cc",
+        "quadcopter_model.cc",
+        "keyboard_input.cc",            # <-- added
+        "quadcopter_controller.h",
+        "quadcopter_model.h",
+        "keyboard_input.h",             # ok to keep header listed but not required
+    ],
+    copts = ["-std=c++20"],
+    deps = [
+        "@drake//geometry:meshcat",
+        "@drake//geometry:meshcat_visualizer",
+        "@drake//geometry:scene_graph",
+        "@drake//multibody/plant",
+        "@drake//systems/analysis:simulator",
+        "@drake//systems/framework:diagram_builder",
+        "@drake//systems/framework:leaf_system",
+        "@drake//math:geometric_transform",
+    ],
+    linkopts = ["-pthread"],
+)
