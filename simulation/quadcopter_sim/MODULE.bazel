@@ -1,5 +1,9 @@
 module(name = "quadcopter_sim")
 
+# Make sure rules_cc is available to provide C++ rules (cc_binary, cc_library, ...).
+# Version 0.2.14 is present in your lock file and is a safe choice.
+bazel_dep(name = "rules_cc", version = "0.2.14")
+
 bazel_dep(name = "drake", version = "")
 
 local_path_override(

@@ -1,13 +1,15 @@
+load("@rules_cc//cc:defs.bzl", "cc_binary")
+
 cc_binary(
     name = "quadcopter",
     srcs = [
         "main.cc",
         "quadcopter_controller.cc",
         "quadcopter_model.cc",
-        "keyboard_input.cc",            # <-- added
+        "keyboard_input.cc",
         "quadcopter_controller.h",
         "quadcopter_model.h",
-        "keyboard_input.h",             # ok to keep header listed but not required
+        "keyboard_input.h",
     ],
     copts = ["-std=c++20"],
     deps = [

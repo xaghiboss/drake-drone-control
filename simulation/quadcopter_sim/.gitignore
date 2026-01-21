@@ -1,0 +1,10 @@
+.bazel_output/
+bazel-*
+bazel-bin/
+bazel-out/
+bazel-testlogs/
+*.swp
+*~
+.DS_Store
+.vscode/
+.idea/
