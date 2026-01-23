@@ -1,10 +1,11 @@
-// main.cc
+// main.cc - Angle Stabilization Mode (Auto-Level)
 #include <iostream>
 #include <memory>
 #include <algorithm>
 #include <chrono>
 #include <thread>
 #include <limits>
+#include <iomanip>
 
 #include <termios.h>
 #include <unistd.h>
@@ -29,7 +30,7 @@
 using namespace drake;
 
 int main() {
-  std::cout << "Starting quadcopter simulation with PID attitude control..." << std::endl;
+  std::cout << "Starting quadcopter simulation - ANGLE STABILIZATION MODE..." << std::endl;
 
   systems::DiagramBuilder<double> builder;
   auto [plant, scene_graph] =
@@ -42,7 +43,7 @@ int main() {
 
   auto controller = builder.AddSystem<systems::QuadcopterController>(
       &plant, &drone_body);
-  controller->set_name("pid_attitude_controller");
+  controller->set_name("cascaded_angle_rate_controller");
 
   // Export control input port (port 0)
   builder.ExportInput(controller->get_input_port(0), "control_input");
@@ -83,23 +84,33 @@ int main() {
   const double hover_thrust = body_mass * 9.81;  // Total thrust needed to hover
 
   std::cout << "\n╔══════════════════════════════════════════════════╗" << std::endl;
-  std::cout << "║  QUADCOPTER PID ATTITUDE CONTROL SIMULATION  ║" << std::endl;
+  std::cout << "║   QUADCOPTER ANGLE STABILIZATION (AUTO-LEVEL)  ║" << std::endl;
   std::cout << "╚══════════════════════════════════════════════════╝" << std::endl;
   std::cout << "\nDrone specifications:" << std::endl;
   std::cout << " • Mass: " << body_mass << " kg" << std::endl;
   std::cout << " • Hover thrust: " << hover_thrust << " N" << std::endl;
 
-  std::cout << "\nControls (CLOSED-LOOP PID):" << std::endl;
-  std::cout << " • Arrow Up / Down    : Increase/Decrease thrust (altitude)" << std::endl;
-  std::cout << " • i / k              : Pitch forward/back (SETPOINT)" << std::endl;
-  std::cout << " • j / l              : Roll left/right (SETPOINT)" << std::endl;
-  std::cout << " • u / o              : Yaw left/right (SETPOINT)" << std::endl;
-  std::cout << " • SPACE              : Reset all attitude setpoints to 0" << std::endl;
+  std::cout << "\n═══════════════════════════════════════════════════" << std::endl;
+  std::cout << "CONTROLS - STABILIZE MODE (Auto-Level):" << std::endl;
+  std::cout << "═══════════════════════════════════════════════════" << std::endl;
+  std::cout << "\nTHRUST:" << std::endl;
+  std::cout << " • Arrow Up / Down    : Increase/Decrease total thrust" << std::endl;
+  std::cout << "\nATTITUDE (hold to tilt, release to AUTO-LEVEL):" << std::endl;
+  std::cout << " • i / k              : Pitch forward/back" << std::endl;
+  std::cout << " • j / l              : Roll left/right" << std::endl;
+  std::cout << " • u / o              : Yaw left/right" << std::endl;
+  std::cout << "\nSYSTEM:" << std::endl;
   std::cout << " • a                  : Arm/Disarm" << std::endl;
   std::cout << " • q                  : Quit" << std::endl;
-  std::cout << "\nNOTE: Attitude setpoints auto-stabilize (PID control)" << std::endl;
+  std::cout << "\n═══════════════════════════════════════════════════" << std::endl;
+  std::cout << "\n✨ AUTO-STABILIZATION BEHAVIOR:" << std::endl;
+  std::cout << " • Hold key → Drone tilts → Moves in that direction" << std::endl;
+  std::cout << " • Release key → Drone AUTO-LEVELS → Movement STOPS" << std::endl;
+  std::cout << " • No need to counter-steer - it levels itself!" << std::endl;
+  std::cout << " • This is like DJI/consumer drones - EASY to fly!" << std::endl;
+  std::cout << "═══════════════════════════════════════════════════\n" << std::endl;
 
-  std::cout << "\nMeshCat URL: " << meshcat->web_url() << std::endl;
+  std::cout << "MeshCat URL: " << meshcat->web_url() << std::endl;
   std::cout << "\nPress Enter to start..." << std::endl;
   std::cin.get();
 
@@ -112,106 +123,126 @@ int main() {
 
   // Control state
   double thrust = 0.0;  // Start with ZERO thrust (drone on ground)
-  const double thrust_inc = 0.5;       // Thrust increment (N)
+  const double thrust_inc = 0.5;  // Thrust increment (N)
   
-  // Attitude setpoints (rad)
-  double desired_roll = 0.0;
-  double desired_pitch = 0.0;
-  double desired_yaw = 0.0;
+  // Angle setpoints (rad) - drone will auto-level to these when keys released
+  // When no key pressed, these decay to zero → drone levels out
+  double target_roll = 0.0;
+  double target_pitch = 0.0;
+  double target_yaw = 0.0;
   
-  const double angle_inc = 0.05;  // 2.86 degrees per keypress
-  const double max_angle = 0.5;   // Max tilt ~28.6 degrees
+  const double max_angle = 0.35;  // Maximum tilt ~20 degrees (slightly higher for responsiveness)
+  const double angle_inc = 0.04;  // Angle increment per key press (more responsive)
   
   bool armed = false;
   bool running = true;
 
-  // Control input vector: 10 elements
-  // [0] total_thrust, [1] roll, [2] pitch, [3] yaw, [4-6] rates, [7-9] reserved
-  Eigen::Matrix<double, 10, 1> control_input;
+  // Control input vector: 4 elements [thrust, roll_angle, pitch_angle, yaw_angle]
+  Eigen::Matrix<double, 4, 1> control_input;
   control_input.setZero();
+  
+  // Track time for periodic status updates
+  double last_print_time = 0.0;
 
   while (running && sim_time < end_time) {
     int key = drake::get_key();
 
-    // Arm / disarm
+    // ========================================================================
+    // ARM / DISARM
+    // ========================================================================
     if (key == 'a' || key == 'A') {
       armed = !armed;
       if (armed) {
         sim_time = 0.0;
         root_context.SetTime(0.0);
-        std::cout << "*** ARMED ***" << std::endl;
+        std::cout << "\n*** ARMED - Motors active ***" << std::endl;
       } else {
-        std::cout << "*** DISARMED ***" << std::endl;
+        std::cout << "\n*** DISARMED - Motors off ***" << std::endl;
       }
       std::this_thread::sleep_for(std::chrono::milliseconds(150));
     }
 
-    // Quit
+    // ========================================================================
+    // QUIT
+    // ========================================================================
     if (key == 'q' || key == 'Q') {
-      std::cout << "Quit requested." << std::endl;
+      std::cout << "\nQuit requested." << std::endl;
       break;
     }
 
-    // Reset all attitude setpoints
-    if (key == ' ') {
-      desired_roll = 0.0;
-      desired_pitch = 0.0;
-      desired_yaw = 0.0;
-      std::cout << "Attitude setpoints reset to level" << std::endl;
-    }
-
-    // Thrust control
+    // ========================================================================
+    // THRUST CONTROL (Arrow keys)
+    // ========================================================================
     if (key == drake::KEY_ARROW_UP) {
       thrust += thrust_inc;
-      thrust = std::min(thrust, hover_thrust * 2.0);  // Max 2x hover
+      thrust = std::min(thrust, hover_thrust * 2.0);  // Max 2x hover thrust
+      std::cout << "Thrust: " << thrust << " N" << std::endl;
     } else if (key == drake::KEY_ARROW_DOWN) {
       thrust -= thrust_inc;
       thrust = std::max(thrust, 0.0);
+      std::cout << "Thrust: " << thrust << " N" << std::endl;
     }
 
-    // Pitch setpoint control
+    // ========================================================================
+    // ANGLE CONTROL (i/k/j/l/u/o keys)
+    // KEY BEHAVIOR: Angles decay toward zero when no key pressed
+    // This creates auto-leveling: release key → angle → 0 → drone levels
+    // ========================================================================
+    
+    // AGGRESSIVE auto-decay toward zero for FAST stopping
+    // Higher decay = faster return to level = quicker stop
+    const double decay_factor = 0.80;  // 20% decay per frame → levels in ~0.3s (was 0.92)
+    target_roll *= decay_factor;
+    target_pitch *= decay_factor;
+    // Note: yaw doesn't decay - holds heading
+    
+    // Apply key inputs (incremental, builds up while held)
     if (key == 'i' || key == 'I') {
-      desired_pitch += angle_inc;  // Pitch forward (positive)
-      desired_pitch = std::min(desired_pitch, max_angle);
+      // Pitch forward
+      target_pitch += angle_inc;
+      target_pitch = std::min(target_pitch, max_angle);
     } else if (key == 'k' || key == 'K') {
-      desired_pitch -= angle_inc;  // Pitch back (negative)
-      desired_pitch = std::max(desired_pitch, -max_angle);
+      // Pitch backward
+      target_pitch -= angle_inc;
+      target_pitch = std::max(target_pitch, -max_angle);
     }
-
-    // Roll setpoint control
+    
     if (key == 'j' || key == 'J') {
-      desired_roll -= angle_inc;  // Roll left (negative)
-      desired_roll = std::max(desired_roll, -max_angle);
+      // Roll left
+      target_roll -= angle_inc;
+      target_roll = std::max(target_roll, -max_angle);
     } else if (key == 'l' || key == 'L') {
-      desired_roll += angle_inc;  // Roll right (positive)
-      desired_roll = std::min(desired_roll, max_angle);
+      // Roll right
+      target_roll += angle_inc;
+      target_roll = std::min(target_roll, max_angle);
     }
-
-    // Yaw setpoint control
+    
     if (key == 'u' || key == 'U') {
-      desired_yaw += angle_inc;  // Yaw left
+      // Yaw left
+      target_yaw += angle_inc;
     } else if (key == 'o' || key == 'O') {
-      desired_yaw -= angle_inc;  // Yaw right
+      // Yaw right
+      target_yaw -= angle_inc;
     }
+    
+    // Normalize yaw to [-π, π]
+    while (target_yaw > M_PI) target_yaw -= 2.0 * M_PI;
+    while (target_yaw < -M_PI) target_yaw += 2.0 * M_PI;
+    
+    // Zero out very small angles (dead zone for cleaner behavior)
+    if (std::abs(target_roll) < 0.005) target_roll = 0.0;
+    if (std::abs(target_pitch) < 0.005) target_pitch = 0.0;
 
-    // Normalize yaw to [-pi, pi]
-    while (desired_yaw > M_PI) desired_yaw -= 2.0 * M_PI;
-    while (desired_yaw < -M_PI) desired_yaw += 2.0 * M_PI;
-
-    // Build control input
+    // ========================================================================
+    // BUILD CONTROL INPUT
+    // ========================================================================
     if (!armed) {
       control_input.setZero();
     } else {
       control_input(0) = thrust;
-      control_input(1) = desired_roll;
-      control_input(2) = desired_pitch;
-      control_input(3) = desired_yaw;
-      control_input(4) = 0.0;  // desired roll rate
-      control_input(5) = 0.0;  // desired pitch rate
-      control_input(6) = 0.0;  // desired yaw rate
-      control_input(7) = 0.0;  // reserved
-      control_input(8) = 0.0;  // reserved
-      control_input(9) = 0.0;  // reserved
+      control_input(1) = target_roll;    // Target angles (not rates!)
+      control_input(2) = target_pitch;
+      control_input(3) = target_yaw;
     }
 
     // Send to controller
@@ -220,25 +251,34 @@ int main() {
         drake::Value<drake::systems::BasicVector<double>>(
             drake::systems::BasicVector<double>(control_input)));
 
-    // Advance simulation
+    // ========================================================================
+    // ADVANCE SIMULATION
+    // ========================================================================
     if (armed) {
       simulator.AdvanceTo(sim_time + dt);
       sim_time += dt;
       
       // Print status every 1 second
-      if (static_cast<int>(sim_time * 10) % 10 == 0) {
+      if (sim_time - last_print_time >= 1.0) {
         auto& current_plant_context = plant.GetMyMutableContextFromRoot(&root_context);
         const math::RigidTransformd current_pose = 
             plant.GetFreeBodyPose(current_plant_context, drone_body);
         const Eigen::Vector3d pos = current_pose.translation();
         const math::RollPitchYaw<double> current_rpy(current_pose.rotation());
         
-        std::cout << "t=" << sim_time 
-                  << " | Thrust=" << thrust 
-                  << " | Pos: [" << pos(0) << ", " << pos(1) << ", " << pos(2) << "]"
-                  << " | RPY: [" << current_rpy.roll_angle() 
-                  << ", " << current_rpy.pitch_angle() 
-                  << ", " << current_rpy.yaw_angle() << "]" << std::endl;
+        std::cout << "t=" << std::fixed << std::setprecision(1) << sim_time 
+                  << " | Thrust=" << std::setprecision(1) << thrust 
+                  << "N | Pos=[" << std::setprecision(2) 
+                  << pos(0) << ", " << pos(1) << ", " << pos(2) << "]m"
+                  << " | Target=[" << std::setprecision(1)
+                  << target_roll*57.3 << "°, " 
+                  << target_pitch*57.3 << "°, " 
+                  << target_yaw*57.3 << "°]"
+                  << " | Actual=[" << std::setprecision(1)
+                  << current_rpy.roll_angle()*57.3 << "°, " 
+                  << current_rpy.pitch_angle()*57.3 << "°, " 
+                  << current_rpy.yaw_angle()*57.3 << "°]" << std::endl;
+        last_print_time = sim_time;
       }
     } else {
       diagram->ForcedPublish(root_context);
@@ -256,7 +296,7 @@ int main() {
   tcsetattr(STDIN_FILENO, TCSANOW, &term);
   
   std::cout << "Press Enter to exit..." << std::endl;
-  std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');  // Clear any pending input
+  std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
   std::cin.get();
   return 0;
 }
