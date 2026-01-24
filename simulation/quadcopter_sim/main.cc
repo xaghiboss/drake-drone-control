@@ -156,9 +156,11 @@ int main() {
   
   // Angle setpoints (rad) - drone will auto-level to these when keys released
   // When no key pressed, these decay to zero → drone levels out
-  double target_roll = 0.0;
-  double target_pitch = 0.0;
-  double target_yaw = 0.0;
+  // BALANCED auto-decay for smooth stopping without instability
+  const double decay_factor = 0.85;  // 15% decay per frame
+  double target_roll = decay_factor;
+  double target_pitch = decay_factor;
+  double target_yaw = decay_factor;  // ADD THIS LINE - yaw should also decay!
   
   const double max_angle = 0.4;   // Maximum tilt ~23 degrees (higher for agility)
   const double angle_inc = 0.05;  // Angle increment per key press (very responsive)
@@ -246,7 +248,7 @@ int main() {
       }
     }
 
-    // ========================================================================
+        // ========================================================================
     // ANGLE CONTROL (i/k/j/l/u/o keys)
     // KEY BEHAVIOR: Angles decay toward zero when no key pressed
     // This creates auto-leveling: release key → angle → 0 → drone levels
@@ -254,31 +256,54 @@ int main() {
     
     // BALANCED auto-decay for smooth stopping without instability
     // Moderate decay = stable takeoff + responsive stopping
-    const double decay_factor = 0.85;  // 15% decay per frame (was 0.70)
-    target_roll *= decay_factor;
-    target_pitch *= decay_factor;
-    // Note: yaw doesn't decay - holds heading
+        // BALANCED auto-decay for smooth stopping without instability
+    const double decay_factor = 0.85;  // 15% decay per frame
     
-    // Apply key inputs (incremental, builds up while held)
+    // Apply decay ONLY if no keys are pressed
+    bool pitch_key_pressed = (key == 'i' || key == 'I' || key == 'k' || key == 'K');
+    bool roll_key_pressed = (key == 'j' || key == 'J' || key == 'l' || key == 'L');
+    bool yaw_key_pressed = (key == 'u' || key == 'U' || key == 'o' || key == 'O');
+    
+    if (!pitch_key_pressed && !roll_key_pressed) {
+      target_roll *= decay_factor;
+      target_pitch *= decay_factor;
+    }
+    
+    if (!yaw_key_pressed) {
+      target_yaw *= decay_factor;  // Only decay when not pressing yaw keys
+    }
+    
+    // User input in WORLD FRAME (what the pilot expects)
+    double world_forward = 0.0;
+    double world_right = 0.0;
+    
+    // Apply key inputs
     if (key == 'i' || key == 'I') {
-      // Pitch forward
-      target_pitch += angle_inc;
-      target_pitch = std::min(target_pitch, max_angle);
+      world_forward += angle_inc;
     } else if (key == 'k' || key == 'K') {
-      // Pitch backward
-      target_pitch -= angle_inc;
-      target_pitch = std::max(target_pitch, -max_angle);
+      world_forward -= angle_inc;
     }
     
     if (key == 'j' || key == 'J') {
-      // Roll left
-      target_roll -= angle_inc;
-      target_roll = std::max(target_roll, -max_angle);
+      world_right -= angle_inc;  // Left = negative right
     } else if (key == 'l' || key == 'L') {
-      // Roll right
-      target_roll += angle_inc;
-      target_roll = std::min(target_roll, max_angle);
+      world_right += angle_inc;
     }
+    
+    // TRANSFORM world frame commands to body frame (compensate for 45° rotation)
+    // Since drone is spawned at 45° yaw, we need to rotate commands by -45°
+    const double cos45 = 0.7071;  // cos(45°) = sin(45°)
+    
+    // Rotation matrix for -45° (inverse of initial_yaw):
+    // [cos(-45°)  -sin(-45°)]   [world_forward]   [target_pitch]
+    // [sin(-45°)   cos(-45°)] * [world_right  ] = [target_roll ]
+    
+    target_pitch += cos45 * world_forward - cos45 * world_right;
+    target_roll += cos45 * world_forward + cos45 * world_right;
+    
+    // Clamp to limits
+    target_pitch = std::clamp(target_pitch, -max_angle, max_angle);
+    target_roll = std::clamp(target_roll, -max_angle, max_angle);
     
     if (key == 'u' || key == 'U') {
       // Yaw left
@@ -295,6 +320,7 @@ int main() {
     // Zero out very small angles (dead zone for cleaner behavior)
     if (std::abs(target_roll) < 0.005) target_roll = 0.0;
     if (std::abs(target_pitch) < 0.005) target_pitch = 0.0;
+    if (std::abs(target_yaw) < 0.005) target_yaw = 0.0;
 
     // ========================================================================
     // BUILD CONTROL INPUT + AUTO-HOVER ALTITUDE CONTROL

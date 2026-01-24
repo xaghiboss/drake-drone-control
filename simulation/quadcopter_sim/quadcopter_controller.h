@@ -57,20 +57,20 @@ class QuadcopterController : public LeafSystem<double> {
   
   // OUTER LOOP: Angle → Rate (Proportional only)
   // Balanced for quick response without instability at takeoff
-  const double kp_angle_roll_ = 6.0;     // Reduced from 15.0 for stability
-  const double kp_angle_pitch_ = 6.0;    // Reduced from 15.0 for stability
-  const double kp_angle_yaw_ = 3.0;      // Keep moderate for yaw
+  const double kp_angle_roll_ = 50.0;     // Reduced from 15.0 for stability
+  const double kp_angle_pitch_ = 50.0;    // Reduced from 15.0 for stability
+  const double kp_angle_yaw_ = 50.0;      // Keep moderate for yaw
   
   // INNER LOOP: Rate → Torque (PD control)
   // Balanced P and D for responsive yet stable control
-  const double kp_rate_roll_ = 0.12;     // Reduced from 0.25
-  const double kd_rate_roll_ = 0.01;     // Reduced from 0.015
+  const double kp_rate_roll_ = 15.0;     // Reduced from 0.25
+  const double kd_rate_roll_ = 5;     // Reduced from 0.015
   
-  const double kp_rate_pitch_ = 0.12;    // Reduced from 0.25
-  const double kd_rate_pitch_ = 0.01;    // Reduced from 0.015
+  const double kp_rate_pitch_ = 15.0;    // Reduced from 0.25
+  const double kd_rate_pitch_ = 5;    // Reduced from 0.015
   
-  const double kp_rate_yaw_ = 0.08;      // Keep moderate
-  const double kd_rate_yaw_ = 0.004;     // Keep moderate
+  const double kp_rate_yaw_ = 5;      // Keep moderate
+  const double kd_rate_yaw_ = 2.0;     // Keep moderate
 };
 
 }  // namespace systems

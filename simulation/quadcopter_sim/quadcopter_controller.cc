@@ -94,11 +94,6 @@ void QuadcopterController::CalcSpatialForces(
   // ========================================================================
   // CASCADED CONTROL: OUTER LOOP (Angle → Desired Rate)
   // ========================================================================
-  // This is the stabilization magic!
-  // When target_angle = 0 and current_angle ≠ 0:
-  //   → angle_error is negative
-  //   → desired_rate is negative
-  //   → drone rotates back toward level
   
   // Compute angle errors
   double roll_error = target_roll - current_roll;
@@ -110,7 +105,6 @@ void QuadcopterController::CalcSpatialForces(
   while (yaw_error < -M_PI) yaw_error += 2.0 * M_PI;
   
   // Outer loop: Convert angle errors to desired rates (P control)
-  // These are the rates we WANT in order to correct the angle error
   const double desired_roll_rate = kp_angle_roll_ * roll_error;
   const double desired_pitch_rate = kp_angle_pitch_ * pitch_error;
   const double desired_yaw_rate = kp_angle_yaw_ * yaw_error;
@@ -118,19 +112,13 @@ void QuadcopterController::CalcSpatialForces(
   // ========================================================================
   // CASCADED CONTROL: INNER LOOP (Rate → Torque)
   // ========================================================================
-  // Now we use PD control to achieve the desired rates computed above
   
   // Compute rate errors
   const double roll_rate_error = desired_roll_rate - current_roll_rate;
   const double pitch_rate_error = desired_pitch_rate - current_pitch_rate;
   const double yaw_rate_error = desired_yaw_rate - current_yaw_rate;
   
-  // Inner loop: PD control on rates to generate torques
-  // P term: proportional to rate error (main corrective action)
-  // D term: damping based on current rate (prevents overshoot/oscillation)
-  // 
-  // Note: Negative D term because we want to oppose current motion
-  // This creates critical damping for fastest stop without overshoot
+  // Inner loop: PD control on rates to generate torque commands
   const double roll_torque = kp_rate_roll_ * roll_rate_error 
                            - kd_rate_roll_ * current_roll_rate;
   const double pitch_torque = kp_rate_pitch_ * pitch_rate_error 
@@ -139,71 +127,87 @@ void QuadcopterController::CalcSpatialForces(
                           - kd_rate_yaw_ * current_yaw_rate;
   
   // ========================================================================
-  // THRUST MIXING: Torques → Individual Rotor Thrusts
-  // X-CONFIGURATION MIXING with YAW compensation
+  // DIFFERENTIAL THRUST MIXING - REAL DRONE STYLE
   // ========================================================================
+  // Motor layout (X-configuration, viewed from above):
+  //        Front
+  //     Red   Blue
+  //       \ X /
+  //       / X \
+  //   Yellow  Green
+  //       Back
+  //
+  // Movement pairs:
+  //   FORWARD:  Blue↑ Red↑, Yellow↓ Green↓  (pitch forward)
+  //   BACKWARD: Blue↓ Red↓, Yellow↑ Green↑  (pitch back)
+  //   LEFT:     Blue↑ Yellow↑, Red↓ Green↓  (roll left)
+  //   RIGHT:    Blue↓ Yellow↓, Red↑ Green↑  (roll right)
   
   const double arm_length = 0.15;  // meters
   
   // Baseline: equal thrust on all rotors
   const double base_thrust_per_rotor = total_thrust / 4.0;
   
-  // X-CONFIGURATION MIXING MATRIX
-  // For X-config at 45°, effective arm length is arm_length/sqrt(2) per axis
-  const double arm_eff = arm_length * 0.7071;  // 1/sqrt(2)
+  // Convert torques to differential thrust amounts
+  // Positive pitch_torque = pitch forward = front motors decrease, back motors increase
+  // Positive roll_torque = roll right = right motors decrease, left motors increase
   
-  // Convert torques to thrust differentials
-  // In X-config, each motor contributes to BOTH pitch and roll
-  const double pitch_contribution = pitch_torque / (2.0 * arm_eff);
-  const double roll_contribution = roll_torque / (2.0 * arm_eff);
+  const double pitch_diff = pitch_torque / (2.0 * arm_length);  // Split across 2 motor pairs
+  const double roll_diff = roll_torque / (2.0 * arm_length);    // Split across 2 motor pairs
+  const double yaw_diff = yaw_torque / 4.0;
   
-  // Yaw mixing: simulate counter-rotating propellers
-  // In real quad: Front-Right & Back-Left spin CW, Front-Left & Back-Right spin CCW
-  // Yaw torque distributed to maintain zero net angular momentum
-  const double yaw_contribution = yaw_torque / 4.0;
+  // REAL DRONE DIFFERENTIAL THRUST MIXING:
+  // 
+  // Blue (Front-Right):
+  //   - Part of FRONT pair (for pitch): pitch forward → decrease
+  //   - Part of RIGHT pair (for roll): roll right → decrease
+  //   - CW propeller: yaw right → decrease
+  double f_blue = base_thrust_per_rotor - pitch_diff - roll_diff - yaw_diff;
   
-  // Apply mixing matrix for X-configuration:
-  // Motor layout after 45° rotation:
-  //   front (+X) = Blue = Front-Right diagonal (CW prop)
-  //   back (-X) = Green = Back-Left diagonal (CW prop)  
-  //   left (+Y) = Red = Front-Left diagonal (CCW prop)
-  //   right (-Y) = Yellow = Back-Right diagonal (CCW prop)
+  // Red (Front-Left):
+  //   - Part of FRONT pair (for pitch): pitch forward → decrease
+  //   - Part of LEFT pair (for roll): roll right → increase
+  //   - CCW propeller: yaw right → increase
+  double f_red = base_thrust_per_rotor - pitch_diff + roll_diff + yaw_diff;
   
-  // Blue (Front-Right): +pitch, +roll, -yaw (CW prop)
-  double f_front = base_thrust_per_rotor + pitch_contribution + roll_contribution - yaw_contribution;
+  // Yellow (Back-Right):
+  //   - Part of BACK pair (for pitch): pitch forward → increase
+  //   - Part of RIGHT pair (for roll): roll right → decrease
+  //   - CCW propeller: yaw right → increase
+  double f_yellow = base_thrust_per_rotor + pitch_diff - roll_diff + yaw_diff;
   
-  // Green (Back-Left): -pitch, -roll, -yaw (CW prop)
-  double f_back = base_thrust_per_rotor - pitch_contribution - roll_contribution - yaw_contribution;
-  
-  // Red (Front-Left): +pitch, -roll, +yaw (CCW prop)
-  double f_left = base_thrust_per_rotor + pitch_contribution - roll_contribution + yaw_contribution;
-  
-  // Yellow (Back-Right): -pitch, +roll, +yaw (CCW prop)
-  double f_right = base_thrust_per_rotor - pitch_contribution + roll_contribution + yaw_contribution;
+  // Green (Back-Left):
+  //   - Part of BACK pair (for pitch): pitch forward → increase
+  //   - Part of LEFT pair (for roll): roll right → increase
+  //   - CW propeller: yaw right → decrease
+  double f_green = base_thrust_per_rotor + pitch_diff + roll_diff - yaw_diff;
   
   // Clamp to physical limits
   const double max_single_rotor = total_thrust * 0.9;
-  f_front = std::clamp(f_front, 0.0, max_single_rotor);
-  f_back  = std::clamp(f_back, 0.0, max_single_rotor);
-  f_left  = std::clamp(f_left, 0.0, max_single_rotor);
-  f_right = std::clamp(f_right, 0.0, max_single_rotor);
+  f_blue = std::clamp(f_blue, 0.0, max_single_rotor);
+  f_red = std::clamp(f_red, 0.0, max_single_rotor);
+  f_yellow = std::clamp(f_yellow, 0.0, max_single_rotor);
+  f_green = std::clamp(f_green, 0.0, max_single_rotor);
   
   // ========================================================================
   // APPLY FORCES TO MULTIBODY SYSTEM
   // ========================================================================
   
+  // X-CONFIGURATION rotor positions (45° diagonals)
+  const double arm_diag = arm_length * 0.7071;  // arm_length / sqrt(2)
+
   const std::vector<Eigen::Vector3d> rotor_positions = {
-      {arm_length, 0.0, 0.0},    // front
-      {-arm_length, 0.0, 0.0},   // back
-      {0.0, arm_length, 0.0},    // left
-      {0.0, -arm_length, 0.0}    // right
+      {arm_diag, -arm_diag, 0.0},    // Blue - Front-Right diagonal
+      {arm_diag, arm_diag, 0.0},     // Red - Front-Left diagonal
+      {-arm_diag, -arm_diag, 0.0},   // Yellow - Back-Right diagonal
+      {-arm_diag, arm_diag, 0.0}     // Green - Back-Left diagonal
   };
   
   auto& output = 
       output_abstract->get_mutable_value<std::vector<drake::multibody::ExternallyAppliedSpatialForce<double>>>();
   
   output.clear();
-  output.reserve(5);
+  output.reserve(4);
   
   // Apply rotor forces (transformed from body to world frame)
   auto push_rotor = [&](const Eigen::Vector3d& p_B, double fz) {
@@ -221,21 +225,26 @@ void QuadcopterController::CalcSpatialForces(
     output.push_back(sf);
   };
   
-  push_rotor(rotor_positions[0], f_front);
-  push_rotor(rotor_positions[1], f_back);
-  push_rotor(rotor_positions[2], f_left);
-  push_rotor(rotor_positions[3], f_right);
+  push_rotor(rotor_positions[0], f_blue);    // Front-Right
+  push_rotor(rotor_positions[1], f_red);     // Front-Left
+  push_rotor(rotor_positions[2], f_yellow);  // Back-Right
+  push_rotor(rotor_positions[3], f_green);   // Back-Left
   
-  // Apply yaw torque as pure moment
+    // Apply yaw as pure moment IN BODY FRAME
   if (std::abs(yaw_torque) > 1e-12) {
     drake::multibody::ExternallyAppliedSpatialForce<double> tau;
     tau.body_index = drone_body_->index();
     tau.p_BoBq_B = Eigen::Vector3d::Zero();
     
+    // Apply moment directly in body frame (don't transform to world)
     Eigen::Vector3d M_B(0.0, 0.0, yaw_torque);
-    Eigen::Vector3d M_W = R_WB * M_B;
     
-    tau.F_Bq_W = drake::multibody::SpatialForce<double>(M_W, Eigen::Vector3d::Zero());
+    // F_Bq_W expects world frame, but for moments at center of mass,
+    // we need to express it at the application point
+    tau.F_Bq_W = drake::multibody::SpatialForce<double>(
+        M_B,                      // Moment in body frame
+        Eigen::Vector3d::Zero()   // No translational force
+    );
     output.push_back(tau);
   }
 }
