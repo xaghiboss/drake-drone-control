@@ -32,10 +32,18 @@ class QuadcopterController : public LeafSystem<double> {
   //
   // Input port 1 is the plant state (auto-connected)
   //
-  // This implements CASCADED ANGLE + RATE CONTROL (like Stabilize/Angle mode):
+  // This implements CASCADED ANGLE + RATE CONTROL for X-CONFIGURATION:
   // - Outer loop: P controller on angle error → desired rate
   // - Inner loop: PD controller on rate error → torque
-  // - When input = 0: target angle = 0, drone auto-levels and stops
+  // - Thrust mixing: ALL 4 MOTORS participate in pitch AND roll
+  //
+  // X-CONFIG MOTOR MIXING (quadcopter rotated 45°):
+  //   Forward: Blue+Red increase, Yellow+Green decrease
+  //   Backward: Blue+Red decrease, Yellow+Green increase  
+  //   Left: Blue+Yellow increase, Red+Green decrease
+  //   Right: Blue+Yellow decrease, Red+Green increase
+  //
+  // When input = 0: target angle = 0, drone auto-levels and stops
   void CalcSpatialForces(
       const Context<double>& context,
       drake::AbstractValue* output) const;
@@ -44,28 +52,25 @@ class QuadcopterController : public LeafSystem<double> {
   const drake::multibody::RigidBody<double>* drone_body_{nullptr};
   
   // ========================================================================
-  // CASCADED CONTROLLER GAINS (tuned for MAXIMUM RESPONSIVENESS)
+  // CASCADED CONTROLLER GAINS (tuned for STABLE yet RESPONSIVE flight)
   // ========================================================================
   
   // OUTER LOOP: Angle → Rate (Proportional only)
-  // Higher gain = faster correction when tilted
-  // Tuned for aggressive response without overshoot
-  const double kp_angle_roll_ = 8.0;     // Roll angle to rate (was 4.0)
-  const double kp_angle_pitch_ = 8.0;    // Pitch angle to rate (was 4.0)
-  const double kp_angle_yaw_ = 3.0;      // Yaw angle to rate (was 2.0)
+  // Balanced for quick response without instability at takeoff
+  const double kp_angle_roll_ = 6.0;     // Reduced from 15.0 for stability
+  const double kp_angle_pitch_ = 6.0;    // Reduced from 15.0 for stability
+  const double kp_angle_yaw_ = 3.0;      // Keep moderate for yaw
   
   // INNER LOOP: Rate → Torque (PD control)
-  // Higher kp = more aggressive torque response
-  // Higher kd = more damping (prevents oscillation)
-  // Tuned for critical damping (fastest stop without overshoot)
-  const double kp_rate_roll_ = 0.15;     // Roll rate P gain (was 0.08)
-  const double kd_rate_roll_ = 0.008;    // Roll rate D gain (was 0.002)
+  // Balanced P and D for responsive yet stable control
+  const double kp_rate_roll_ = 0.12;     // Reduced from 0.25
+  const double kd_rate_roll_ = 0.01;     // Reduced from 0.015
   
-  const double kp_rate_pitch_ = 0.15;    // Pitch rate P gain (was 0.08)
-  const double kd_rate_pitch_ = 0.008;   // Pitch rate D gain (was 0.002)
+  const double kp_rate_pitch_ = 0.12;    // Reduced from 0.25
+  const double kd_rate_pitch_ = 0.01;    // Reduced from 0.015
   
-  const double kp_rate_yaw_ = 0.08;      // Yaw rate P gain (was 0.05)
-  const double kd_rate_yaw_ = 0.004;     // Yaw rate D gain (was 0.002)
+  const double kp_rate_yaw_ = 0.08;      // Keep moderate
+  const double kd_rate_yaw_ = 0.004;     // Keep moderate
 };
 
 }  // namespace systems

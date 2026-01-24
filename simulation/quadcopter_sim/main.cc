@@ -69,8 +69,10 @@ int main() {
   auto& root_context = simulator.get_mutable_context();
   auto& plant_context = plant.GetMyMutableContextFromRoot(&root_context);
 
-  // Start pose at ground level (z=0)
-  math::RollPitchYaw<double> rpy(0.0, 0.0, 0.0);
+  // Start pose at ground level, ROTATED 45° to form X configuration
+  // This makes the drone's body axes aligned diagonally for intuitive control
+  const double initial_yaw = M_PI / 4.0;  // 45 degrees rotation
+  math::RollPitchYaw<double> rpy(0.0, 0.0, initial_yaw);
   math::RigidTransformd initial_pose(
       rpy.ToRotationMatrix(),
       Eigen::Vector3d(0, 0, 0.0));  // Start at ground
@@ -84,17 +86,37 @@ int main() {
   const double hover_thrust = body_mass * 9.81;  // Total thrust needed to hover
 
   std::cout << "\n╔══════════════════════════════════════════════════╗" << std::endl;
-  std::cout << "║   QUADCOPTER ANGLE STABILIZATION (AUTO-LEVEL)  ║" << std::endl;
+  std::cout << "║   QUADCOPTER X-CONFIG STABILIZATION MODE     ║" << std::endl;
   std::cout << "╚══════════════════════════════════════════════════╝" << std::endl;
   std::cout << "\nDrone specifications:" << std::endl;
   std::cout << " • Mass: " << body_mass << " kg" << std::endl;
   std::cout << " • Hover thrust: " << hover_thrust << " N" << std::endl;
+  std::cout << " • Configuration: X-FRAME (45° rotated)" << std::endl;
+  
+  std::cout << "\n     MOTOR LAYOUT (X-Configuration):" << std::endl;
+  std::cout << "           Red (FL)" << std::endl;
+  std::cout << "          /        Blue (FR)" << std::endl;
+  std::cout << "         /        /" << std::endl;
+  std::cout << "        /        /" << std::endl;
+  std::cout << "       +--------+" << std::endl;
+  std::cout << "        \\        \\" << std::endl;
+  std::cout << "         \\        \\" << std::endl;
+  std::cout << "          \\        Yellow (BR)" << std::endl;
+  std::cout << "           Green (BL)" << std::endl;
+  
+  std::cout << "\n     MOTOR MIXING:" << std::endl;
+  std::cout << "     Forward:  Blue+Red ↑,  Yellow+Green ↓" << std::endl;
+  std::cout << "     Backward: Blue+Red ↓,  Yellow+Green ↑" << std::endl;
+  std::cout << "     Left:     Blue+Yellow ↑,  Red+Green ↓" << std::endl;
+  std::cout << "     Right:    Blue+Yellow ↓,  Red+Green ↑" << std::endl;
 
   std::cout << "\n═══════════════════════════════════════════════════" << std::endl;
   std::cout << "CONTROLS - STABILIZE MODE (Auto-Level):" << std::endl;
   std::cout << "═══════════════════════════════════════════════════" << std::endl;
-  std::cout << "\nTHRUST:" << std::endl;
-  std::cout << " • Arrow Up / Down    : Increase/Decrease total thrust" << std::endl;
+  std::cout << "\nALTITUDE:" << std::endl;
+  std::cout << " • Arrow Up / Down    : Increase/Decrease thrust" << std::endl;
+  std::cout << " • h                  : Enable AUTO-HOVER (holds current altitude)" << std::endl;
+  std::cout << " • SPACE              : Disable auto-hover (manual thrust)" << std::endl;
   std::cout << "\nATTITUDE (hold to tilt, release to AUTO-LEVEL):" << std::endl;
   std::cout << " • i / k              : Pitch forward/back" << std::endl;
   std::cout << " • j / l              : Roll left/right" << std::endl;
@@ -103,11 +125,11 @@ int main() {
   std::cout << " • a                  : Arm/Disarm" << std::endl;
   std::cout << " • q                  : Quit" << std::endl;
   std::cout << "\n═══════════════════════════════════════════════════" << std::endl;
-  std::cout << "\n✨ AUTO-STABILIZATION BEHAVIOR:" << std::endl;
-  std::cout << " • Hold key → Drone tilts → Moves in that direction" << std::endl;
-  std::cout << " • Release key → Drone AUTO-LEVELS → Movement STOPS" << std::endl;
-  std::cout << " • No need to counter-steer - it levels itself!" << std::endl;
-  std::cout << " • This is like DJI/consumer drones - EASY to fly!" << std::endl;
+  std::cout << "\n✨ FEATURES:" << std::endl;
+  std::cout << " • BALANCED stabilization - stable takeoff + responsive control" << std::endl;
+  std::cout << " • AUTO-HOVER: Press 'h' to lock altitude" << std::endl;
+  std::cout << " • Release keys → Auto-levels smoothly" << std::endl;
+  std::cout << " • YAW-COMPENSATED mixing prevents unwanted rotation" << std::endl;
   std::cout << "═══════════════════════════════════════════════════\n" << std::endl;
 
   std::cout << "MeshCat URL: " << meshcat->web_url() << std::endl;
@@ -125,14 +147,21 @@ int main() {
   double thrust = 0.0;  // Start with ZERO thrust (drone on ground)
   const double thrust_inc = 0.5;  // Thrust increment (N)
   
+  // Auto-hover state
+  bool auto_hover_enabled = false;
+  double hover_target_altitude = 0.0;
+  const double kp_altitude = 3.0;    // Proportional gain for altitude hold
+  const double kd_altitude = 2.0;    // Derivative gain (damping)
+  double last_altitude = 0.0;
+  
   // Angle setpoints (rad) - drone will auto-level to these when keys released
   // When no key pressed, these decay to zero → drone levels out
   double target_roll = 0.0;
   double target_pitch = 0.0;
   double target_yaw = 0.0;
   
-  const double max_angle = 0.35;  // Maximum tilt ~20 degrees (slightly higher for responsiveness)
-  const double angle_inc = 0.04;  // Angle increment per key press (more responsive)
+  const double max_angle = 0.4;   // Maximum tilt ~23 degrees (higher for agility)
+  const double angle_inc = 0.05;  // Angle increment per key press (very responsive)
   
   bool armed = false;
   bool running = true;
@@ -171,16 +200,50 @@ int main() {
     }
 
     // ========================================================================
-    // THRUST CONTROL (Arrow keys)
+    // THRUST CONTROL (Arrow keys) + AUTO-HOVER
     // ========================================================================
     if (key == drake::KEY_ARROW_UP) {
-      thrust += thrust_inc;
-      thrust = std::min(thrust, hover_thrust * 2.0);  // Max 2x hover thrust
-      std::cout << "Thrust: " << thrust << " N" << std::endl;
+      if (auto_hover_enabled) {
+        // In auto-hover mode, adjust target altitude
+        hover_target_altitude += 0.1;  // 10cm increment
+        std::cout << "Target altitude: " << hover_target_altitude << " m" << std::endl;
+      } else {
+        // Manual thrust mode
+        thrust += thrust_inc;
+        thrust = std::min(thrust, hover_thrust * 2.5);
+        std::cout << "Thrust: " << thrust << " N" << std::endl;
+      }
     } else if (key == drake::KEY_ARROW_DOWN) {
-      thrust -= thrust_inc;
-      thrust = std::max(thrust, 0.0);
-      std::cout << "Thrust: " << thrust << " N" << std::endl;
+      if (auto_hover_enabled) {
+        hover_target_altitude -= 0.1;
+        hover_target_altitude = std::max(hover_target_altitude, 0.0);
+        std::cout << "Target altitude: " << hover_target_altitude << " m" << std::endl;
+      } else {
+        thrust -= thrust_inc;
+        thrust = std::max(thrust, 0.0);
+        std::cout << "Thrust: " << thrust << " N" << std::endl;
+      }
+    }
+    
+    // Auto-hover toggle
+    if (key == 'h' || key == 'H') {
+      auto_hover_enabled = true;
+      // Get current altitude from plant
+      auto& current_plant_context = plant.GetMyMutableContextFromRoot(&root_context);
+      const math::RigidTransformd current_pose = 
+          plant.GetFreeBodyPose(current_plant_context, drone_body);
+      hover_target_altitude = current_pose.translation()(2);  // Current Z position
+      std::cout << "\n*** AUTO-HOVER ENABLED at " << hover_target_altitude << "m ***" << std::endl;
+      std::this_thread::sleep_for(std::chrono::milliseconds(150));
+    }
+    
+    // Disable auto-hover
+    if (key == ' ') {
+      if (auto_hover_enabled) {
+        auto_hover_enabled = false;
+        std::cout << "\n*** AUTO-HOVER DISABLED - Manual thrust control ***" << std::endl;
+        std::this_thread::sleep_for(std::chrono::milliseconds(150));
+      }
     }
 
     // ========================================================================
@@ -189,9 +252,9 @@ int main() {
     // This creates auto-leveling: release key → angle → 0 → drone levels
     // ========================================================================
     
-    // AGGRESSIVE auto-decay toward zero for FAST stopping
-    // Higher decay = faster return to level = quicker stop
-    const double decay_factor = 0.80;  // 20% decay per frame → levels in ~0.3s (was 0.92)
+    // BALANCED auto-decay for smooth stopping without instability
+    // Moderate decay = stable takeoff + responsive stopping
+    const double decay_factor = 0.85;  // 15% decay per frame (was 0.70)
     target_roll *= decay_factor;
     target_pitch *= decay_factor;
     // Note: yaw doesn't decay - holds heading
@@ -234,13 +297,36 @@ int main() {
     if (std::abs(target_pitch) < 0.005) target_pitch = 0.0;
 
     // ========================================================================
-    // BUILD CONTROL INPUT
+    // BUILD CONTROL INPUT + AUTO-HOVER ALTITUDE CONTROL
     // ========================================================================
     if (!armed) {
       control_input.setZero();
     } else {
+      // Auto-hover: PD control on altitude
+      if (auto_hover_enabled) {
+        auto& current_plant_context = plant.GetMyMutableContextFromRoot(&root_context);
+        const math::RigidTransformd current_pose = 
+            plant.GetFreeBodyPose(current_plant_context, drone_body);
+        const double current_altitude = current_pose.translation()(2);
+        
+        // Altitude error
+        const double altitude_error = hover_target_altitude - current_altitude;
+        
+        // Estimate vertical velocity (simple finite difference)
+        const double vertical_velocity = (current_altitude - last_altitude) / dt;
+        last_altitude = current_altitude;
+        
+        // PD controller for altitude
+        const double altitude_correction = kp_altitude * altitude_error 
+                                         - kd_altitude * vertical_velocity;
+        
+        // Apply correction on top of hover thrust
+        thrust = hover_thrust + altitude_correction;
+        thrust = std::clamp(thrust, 0.0, hover_thrust * 2.5);
+      }
+      
       control_input(0) = thrust;
-      control_input(1) = target_roll;    // Target angles (not rates!)
+      control_input(1) = target_roll;
       control_input(2) = target_pitch;
       control_input(3) = target_yaw;
     }
@@ -267,17 +353,17 @@ int main() {
         const math::RollPitchYaw<double> current_rpy(current_pose.rotation());
         
         std::cout << "t=" << std::fixed << std::setprecision(1) << sim_time 
-                  << " | Thrust=" << std::setprecision(1) << thrust 
-                  << "N | Pos=[" << std::setprecision(2) 
-                  << pos(0) << ", " << pos(1) << ", " << pos(2) << "]m"
-                  << " | Target=[" << std::setprecision(1)
-                  << target_roll*57.3 << "°, " 
-                  << target_pitch*57.3 << "°, " 
-                  << target_yaw*57.3 << "°]"
-                  << " | Actual=[" << std::setprecision(1)
+                  << " | Thrust=" << std::setprecision(1) << thrust << "N";
+        
+        if (auto_hover_enabled) {
+          std::cout << " [HOVER@" << std::setprecision(2) << hover_target_altitude << "m]";
+        }
+        
+        std::cout << " | Alt=" << std::setprecision(2) << pos(2) << "m"
+                  << " | Angle=[" << std::setprecision(1)
                   << current_rpy.roll_angle()*57.3 << "°, " 
-                  << current_rpy.pitch_angle()*57.3 << "°, " 
-                  << current_rpy.yaw_angle()*57.3 << "°]" << std::endl;
+                  << current_rpy.pitch_angle()*57.3 << "°]" << std::endl;
+        
         last_print_time = sim_time;
       }
     } else {

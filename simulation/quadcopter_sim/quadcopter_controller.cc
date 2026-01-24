@@ -64,6 +64,18 @@ void QuadcopterController::CalcSpatialForces(
   
   // Extract quaternion and create rotation matrix
   Eigen::Quaterniond quat(q(0), q(1), q(2), q(3));
+  
+  // Safety check: ensure quaternion is valid
+  const double quat_norm = quat.norm();
+  if (quat_norm < 0.1) {
+    // Invalid quaternion - drone has flipped catastrophically
+    // Set all forces to zero to prevent further damage
+    auto& output = 
+        output_abstract->get_mutable_value<std::vector<drake::multibody::ExternallyAppliedSpatialForce<double>>>();
+    output.clear();
+    return;
+  }
+  
   quat.normalize();
   const math::RotationMatrix<double> R_WB(quat);
   
@@ -128,6 +140,7 @@ void QuadcopterController::CalcSpatialForces(
   
   // ========================================================================
   // THRUST MIXING: Torques → Individual Rotor Thrusts
+  // X-CONFIGURATION MIXING with YAW compensation
   // ========================================================================
   
   const double arm_length = 0.15;  // meters
@@ -135,17 +148,38 @@ void QuadcopterController::CalcSpatialForces(
   // Baseline: equal thrust on all rotors
   const double base_thrust_per_rotor = total_thrust / 4.0;
   
-  // Convert torques to differential thrust
-  // Torque = Force × Distance → Force_diff = Torque / arm_length
-  const double delta_roll = roll_torque / arm_length;
-  const double delta_pitch = pitch_torque / arm_length;
+  // X-CONFIGURATION MIXING MATRIX
+  // For X-config at 45°, effective arm length is arm_length/sqrt(2) per axis
+  const double arm_eff = arm_length * 0.7071;  // 1/sqrt(2)
   
-  // Calculate individual rotor thrusts
-  // CROSS configuration: front(+X), back(-X), left(+Y), right(-Y)
-  double f_front = base_thrust_per_rotor - delta_pitch;  // Less front → pitch forward
-  double f_back  = base_thrust_per_rotor + delta_pitch;  // More back → pitch forward
-  double f_left  = base_thrust_per_rotor + delta_roll;   // More left → roll right
-  double f_right = base_thrust_per_rotor - delta_roll;   // Less right → roll right
+  // Convert torques to thrust differentials
+  // In X-config, each motor contributes to BOTH pitch and roll
+  const double pitch_contribution = pitch_torque / (2.0 * arm_eff);
+  const double roll_contribution = roll_torque / (2.0 * arm_eff);
+  
+  // Yaw mixing: simulate counter-rotating propellers
+  // In real quad: Front-Right & Back-Left spin CW, Front-Left & Back-Right spin CCW
+  // Yaw torque distributed to maintain zero net angular momentum
+  const double yaw_contribution = yaw_torque / 4.0;
+  
+  // Apply mixing matrix for X-configuration:
+  // Motor layout after 45° rotation:
+  //   front (+X) = Blue = Front-Right diagonal (CW prop)
+  //   back (-X) = Green = Back-Left diagonal (CW prop)  
+  //   left (+Y) = Red = Front-Left diagonal (CCW prop)
+  //   right (-Y) = Yellow = Back-Right diagonal (CCW prop)
+  
+  // Blue (Front-Right): +pitch, +roll, -yaw (CW prop)
+  double f_front = base_thrust_per_rotor + pitch_contribution + roll_contribution - yaw_contribution;
+  
+  // Green (Back-Left): -pitch, -roll, -yaw (CW prop)
+  double f_back = base_thrust_per_rotor - pitch_contribution - roll_contribution - yaw_contribution;
+  
+  // Red (Front-Left): +pitch, -roll, +yaw (CCW prop)
+  double f_left = base_thrust_per_rotor + pitch_contribution - roll_contribution + yaw_contribution;
+  
+  // Yellow (Back-Right): -pitch, +roll, +yaw (CCW prop)
+  double f_right = base_thrust_per_rotor - pitch_contribution + roll_contribution + yaw_contribution;
   
   // Clamp to physical limits
   const double max_single_rotor = total_thrust * 0.9;
