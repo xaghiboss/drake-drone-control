@@ -117,3 +117,7 @@ Max Tilt	20°	23°
 Spawn Yaw	0°	0°
 Author: xaghiboss
 Repository: https://github.com/xaghiboss/drake-drone-control
+Note: This is a development version with known yaw limitation. EOF
+
+
+
