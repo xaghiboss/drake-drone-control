@@ -154,7 +154,7 @@ void QuadcopterController::CalcSpatialForces(
   
   const double pitch_diff = pitch_torque / (2.0 * arm_length);  // Split across 2 motor pairs
   const double roll_diff = roll_torque / (2.0 * arm_length);    // Split across 2 motor pairs
-  const double yaw_diff = yaw_torque / 4.0;
+  // const double yaw_diff = yaw_torque / 4.0;
   
   // REAL DRONE DIFFERENTIAL THRUST MIXING:
   // 
@@ -162,25 +162,25 @@ void QuadcopterController::CalcSpatialForces(
   //   - Part of FRONT pair (for pitch): pitch forward → decrease
   //   - Part of RIGHT pair (for roll): roll right → decrease
   //   - CW propeller: yaw right → decrease
-  double f_blue = base_thrust_per_rotor - pitch_diff - roll_diff - yaw_diff;
+  double f_blue = base_thrust_per_rotor - pitch_diff - roll_diff;
   
   // Red (Front-Left):
   //   - Part of FRONT pair (for pitch): pitch forward → decrease
   //   - Part of LEFT pair (for roll): roll right → increase
   //   - CCW propeller: yaw right → increase
-  double f_red = base_thrust_per_rotor - pitch_diff + roll_diff + yaw_diff;
+  double f_red = base_thrust_per_rotor - pitch_diff + roll_diff ;
   
   // Yellow (Back-Right):
   //   - Part of BACK pair (for pitch): pitch forward → increase
   //   - Part of RIGHT pair (for roll): roll right → decrease
   //   - CCW propeller: yaw right → increase
-  double f_yellow = base_thrust_per_rotor + pitch_diff - roll_diff + yaw_diff;
+  double f_yellow = base_thrust_per_rotor + pitch_diff - roll_diff ;
   
   // Green (Back-Left):
   //   - Part of BACK pair (for pitch): pitch forward → increase
   //   - Part of LEFT pair (for roll): roll right → increase
   //   - CW propeller: yaw right → decrease
-  double f_green = base_thrust_per_rotor + pitch_diff + roll_diff - yaw_diff;
+  double f_green = base_thrust_per_rotor + pitch_diff + roll_diff ;
   
   // Clamp to physical limits
   const double max_single_rotor = total_thrust * 0.9;
@@ -230,22 +230,28 @@ void QuadcopterController::CalcSpatialForces(
   push_rotor(rotor_positions[2], f_yellow);  // Back-Right
   push_rotor(rotor_positions[3], f_green);   // Back-Left
   
-    // Apply yaw as pure moment IN BODY FRAME
+  // Clamp yaw torque to safe limits
+  const double max_yaw_torque = 0.05;  // Experiment with this value
+  const double yaw_torque_clamped = std::clamp(yaw_torque, -max_yaw_torque, max_yaw_torque);
+
+  // Apply yaw torque as pure moment (this is the ONLY way to create yaw)
   if (std::abs(yaw_torque) > 1e-12) {
-    drake::multibody::ExternallyAppliedSpatialForce<double> tau;
-    tau.body_index = drone_body_->index();
-    tau.p_BoBq_B = Eigen::Vector3d::Zero();
+    const double max_yaw_torque = 0.1;  // Clamp to safe value
+    const double yaw_torque_safe = std::clamp(yaw_torque, -max_yaw_torque, max_yaw_torque);
     
-    // Apply moment directly in body frame (don't transform to world)
-    Eigen::Vector3d M_B(0.0, 0.0, yaw_torque);
+    drake::multibody::ExternallyAppliedSpatialForce<double> yaw_moment;
+    yaw_moment.body_index = drone_body_->index();
+    yaw_moment.p_BoBq_B = Eigen::Vector3d::Zero();
     
-    // F_Bq_W expects world frame, but for moments at center of mass,
-    // we need to express it at the application point
-    tau.F_Bq_W = drake::multibody::SpatialForce<double>(
-        M_B,                      // Moment in body frame
-        Eigen::Vector3d::Zero()   // No translational force
+    Eigen::Vector3d M_B(0.0, 0.0, yaw_torque_safe);
+    Eigen::Vector3d M_W = R_WB * M_B;
+
+    yaw_moment.F_Bq_W = drake::multibody::SpatialForce<double>(
+        M_W,                      
+        Eigen::Vector3d::Zero()
     );
-    output.push_back(tau);
+    
+    output.push_back(yaw_moment);
   }
 }
 
