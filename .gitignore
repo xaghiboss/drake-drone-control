@@ -1,18 +1,29 @@
-# Bazel
+# Bazel build outputs
 bazel-*
-bazel-bin/
-bazel-out/
-bazel-testlogs/
+/bazel-bin
+/bazel-out
+/bazel-testlogs
 
-# Build
-build/
-install/
+# C++ compiled files
+*.o
+*.so
+*.a
+*.out
+
+# Executables
+quadcopter
+*.exe
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
 
 # Logs
 *.log
-
-# IDE
-.vscode/
-
-# OS
-.DS_Store
