@@ -86,7 +86,7 @@ local_path_override(
 
 ### 4. Run
 ```bash
-bazel run //:quadcopter
+./run.sh
 ```
 
 ### 5. View Visualization
