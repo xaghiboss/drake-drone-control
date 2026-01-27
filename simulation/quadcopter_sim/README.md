@@ -94,13 +94,13 @@ Open browser: http://localhost:7000
 
 ## **🎮 Controls**
 ```bash
-Key	Action	Key	Action
-W	Forward	Space	Up
-S	Backward	Shift	Down
-A	Left	Q	Rotate Left
-D	Right	E	Rotate Right
-R	Reset	X	Emergency Stop
-ESC	Exit
+Key	         Action	          Key        Action
+W	         Forward	      Space	     Up
+S	         Backward	      Shift	     Down
+A	         Left	          Q 	     Rotate Left
+D	         Right	          E 	     Rotate Right
+R	         Reset	          X	         Emergency Stop
+ESC	         Exit
 ```
 
 ## **📐 Technical Details**
