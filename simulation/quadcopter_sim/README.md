@@ -2,9 +2,7 @@
 
 A physics-based quadcopter flight simulator built with Drake robotics toolkit, featuring real-time 3D visualization and keyboard control.
 
----
-
-## 📦 What's in This Project
+## What's in This Project
 
 ### **Core Simulation Files**
 
@@ -29,7 +27,7 @@ A physics-based quadcopter flight simulator built with Drake robotics toolkit, f
 
 ---
 
-## 🎯 Key Features
+## Key Features
 
 - **Physics Simulation**: 6-DOF rigid body dynamics with gravity, thrust, and aerodynamic effects
 - **Motor Configurations**: Supports both + (aligned) and X (45° offset) quadcopter layouts
@@ -37,23 +35,16 @@ A physics-based quadcopter flight simulator built with Drake robotics toolkit, f
 - **3D Visualization**: Drake MeshCat web interface (localhost:7000)
 - **Modular Design**: Separated model, controller, and input handling
 
----
 
-## 🏗️ Architecture
-
-User Input (Keyboard) ↓ Controller → Converts to motor speeds ↓ Physics Model → Calculates forces/torques ↓ State Integration → Updates position/orientation ↓ Visualization → Renders in MeshCat
-
-Code
-
----
-
-## 🚀 Quick Setup
+## Quick Setup
 
 ### 1. Clone Repository
-```bash
+
 git clone https://github.com/xaghiboss/drake-drone-control.git
 cd drake-drone-control/simulation/quadcopter_sim
-2. Configure Drake Path
+
+### 2. Configure Drake Path
+
 Edit build.sh:
 
 bash
@@ -73,13 +64,19 @@ local_path_override(
     module_name = "drake",
     path = "/YOUR/DRAKE/PATH",  # e.g., /home/username/drake
 )
-3. Build
+
+### 3. Build
+
 bash
 ./build.sh
-4. Run
+
+### 4. Run
+
 bash
 bazel run //:quadcopter
-5. View Visualization
+
+### 5. View Visualization
+
 Open browser: http://localhost:7000
 
 🎮 Controls
@@ -89,8 +86,10 @@ S	Backward	Shift	Down
 A	Left	Q	Rotate Left
 D	Right	E	Rotate Right
 R	Reset	X	Emergency Stop
-ESC	Exit		
-📐 Technical Details
+ESC	Exit
+
+### Technical Details
+
 Physics Implementation
 Rigid body dynamics: Uses Newton-Euler equations
 State vector: Position (x,y,z), velocity (vx,vy,vz), orientation (roll,pitch,yaw), angular velocity (ωx,ωy,ωz)
@@ -103,13 +102,18 @@ C++20: Modern C++ features (auto, lambdas, smart pointers)
 Motor Configurations
 v1.0-v2.0: + configuration (motors aligned with body X/Y axes)
 v3.0: X configuration (motors at ±45° for improved maneuverability)
-📊 Version Summary
+
+### Version Summary
+
 Version	Configuration	Key Features
 v1.0	+ layout	Basic flight, manual control
 v2.0	+ layout	Improved stability, PID tuning
 v3.0	X layout	Better agility, experimental auto-hover
-🛠️ Project Structure Explained
+
+### Project Structure Explained
+
 Code
+
 quadcopter_sim/
 ├── main.cc                    # Simulation loop, MeshCat setup
 ├── quadcopter_model.{h,cc}    # Physics: F=ma, τ=Iα
@@ -120,7 +124,9 @@ quadcopter_sim/
 ├── MODULE.bazel               # External dependencies
 ├── build.sh                   # Build with isolated cache
 └── run.sh                     # Build + run wrapper
-🔍 Code Highlights
+
+### Code Highlights
+
 Quadcopter Model (quadcopter_model.cc)
 Implements UpdatePhysics(dt): Integrates equations of motion
 Motor mixing: Converts 4 motor speeds → net force + 3-axis torque
@@ -133,7 +139,9 @@ Visualization (main.cc)
 Creates MeshCat server on port 7000
 Adds quadcopter body (box) and rotors (cylinders)
 Updates transforms at 100Hz for smooth animation
-⚙️ Build System
+
+### Build System
+
 Uses Bazel for reproducible builds:
 
 Hermetic: All dependencies declared
@@ -141,7 +149,7 @@ Incremental: Only rebuilds changed files
 Cross-platform: Works on Linux/macOS/Windows
 Build output: bazel-bin/quadcopter (executable)
 
-📚 Learning Outcomes
+### Learning Outcomes
 This project demonstrates:
 
 Rigid body dynamics in 3D
@@ -150,10 +158,14 @@ Bazel build configuration
 Drake robotics framework
 C++ project organization (headers, source separation)
 Visualization with MeshCat
-🐛 Known Issues
+
+### Known Issues
+
 v3.0: Yaw oscillation in auto-hover (X-configuration tuning needed)
 General: Requires terminal focus for keyboard input
-🔗 References
+
+### References
+
 Drake Documentation
 Bazel Build System
 Quadcopter Dynamics Paper
