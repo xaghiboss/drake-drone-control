@@ -92,7 +92,7 @@ local_path_override(
 ### 5. View Visualization
 Open browser: http://localhost:7000
 
-## 🎮 Controls
+## **🎮 Controls**
 ```bash
 Key	Action	Key	Action
 W	Forward	Space	Up
@@ -103,7 +103,7 @@ R	Reset	X	Emergency Stop
 ESC	Exit
 ```
 
-## 📐 Technical Details
+## **📐 Technical Details**
 ```bash
 Physics Implementation
 Rigid body dynamics: Uses Newton-Euler equations
@@ -119,15 +119,15 @@ v1.0-v2.0: + configuration (motors aligned with body X/Y axes)
 v3.0: X configuration (motors at ±45° for improved maneuverability)
 ```
 
-## 📊 Version Summary
+## **📊 Version Summary**
 ```bash
-Version	Configuration	Key Features
-v1.0	+ layout	Basic flight, manual control
-v2.0	+ layout	Improved stability, PID tuning
-v3.0	X layout	Better agility, experimental auto-hover
+Version	        Configuration	    Key Features
+v1.0	        + layout	        Basic flight, manual control
+v2.0	        + layout	        Improved stability, PID tuning
+v3.0	        X layout	        Better agility, experimental auto-hover
 ```
 
-## 🛠️ Project Structure Explained
+## **🛠️ Project Structure Explained**
 Code
 ```bash
 quadcopter_sim/
@@ -142,53 +142,50 @@ quadcopter_sim/
 └── run.sh                     # Build + run wrapper
 ```
 
-## 🔍 Code Highlights
-```bash
-Quadcopter Model (quadcopter_model.cc)
-Implements UpdatePhysics(dt): Integrates equations of motion
-Motor mixing: Converts 4 motor speeds → net force + 3-axis torque
-Collision detection: Stops simulation if z < 0 (ground contact)
-Controller (quadcopter_controller.cc)
-Maps keyboard input to desired thrust/torque
-X-configuration motor mixer (45° rotation matrix)
-Saturation limits prevent over-actuation
-Visualization (main.cc)
-Creates MeshCat server on port 7000
-Adds quadcopter body (box) and rotors (cylinders)
-Updates transforms at 100Hz for smooth animation
-```
+## **🔍 Code Highlights**
 
-## ⚙️ Build System
+- Quadcopter Model (quadcopter_model.cc)
+- Implements UpdatePhysics(dt): Integrates equations of motion
+- Motor mixing: Converts 4 motor speeds → net force + 3-axis torque
+- Collision detection: Stops simulation if z < 0 (ground contact)
+- Controller (quadcopter_controller.cc)
+- Maps keyboard input to desired thrust/torque
+- X-configuration motor mixer (45° rotation matrix)
+- Saturation limits prevent over-actuation
+- Visualization (main.cc)
+- Creates MeshCat server on port 7000
+- Adds quadcopter body (box) and rotors (cylinders)
+- Updates transforms at 100Hz for smooth animation
+
+
+## **⚙️ Build System**
 Uses Bazel for reproducible builds:
-```bash
-Hermetic: All dependencies declared
-Incremental: Only rebuilds changed files
-Cross-platform: Works on Linux/macOS/Windows
-Build output: bazel-bin/quadcopter (executable)
-```
 
-## 📚 Learning Outcomes
+- Hermetic: All dependencies declared
+- Incremental: Only rebuilds changed files
+- Cross-platform: Works on Linux/macOS/Windows
+- Build output: bazel-bin/quadcopter (executable)
+
+
+## **📚 Learning Outcomes**
 This project demonstrates:
-```bash
-Rigid body dynamics in 3D
-Real-time control systems
-Bazel build configuration
-Drake robotics framework
-C++ project organization (headers, source separation)
-Visualization with MeshCat
-```
 
-## 🐛 Known Issues
-```bash
-v3.0: Yaw oscillation in auto-hover (X-configuration tuning needed)
-General: Requires terminal focus for keyboard input
-```
+- Rigid body dynamics in 3D
+- Real-time control systems
+- Bazel build configuration
+- Drake robotics framework
+- C++ project organization (headers, source separation)
+- Visualization with MeshCat
 
-## 🔗 References
-```bash
-Drake Documentation
-Bazel Build System
-Quadcopter Dynamics 
-Author: Zirgham, Basil
-Repository: https://github.com/xaghiboss/drake-drone-control
-```
+## **🐛 Known Issues**
+
+- v3.0: Yaw oscillation in auto-hover (X-configuration tuning needed)
+- General: Requires terminal focus for keyboard input
+
+## **🔗 References**
+
+- Drake Documentation
+- Bazel Build System
+- Quadcopter Dynamics 
+- Author: Zirgham, Basil
+- Repository: https://github.com/xaghiboss/drake-drone-control
