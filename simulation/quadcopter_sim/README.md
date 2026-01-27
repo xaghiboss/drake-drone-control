@@ -94,14 +94,30 @@ Open browser: http://localhost:7000
 
 ## **🎮 Controls**
 ```bash
-Key	         Action	          Key        Action
-W	         Forward	      Space	     Up
-S	         Backward	      Shift	     Down
-A	         Left	          Q 	     Rotate Left
-D	         Right	          E 	     Rotate Right
-R	         Reset	          X	         Emergency Stop
-ESC	         Exit
+Key	         Action	          
+I	         Pitch Forward	      
+K	         Pitch Backward	      
+J	         Roll Left	          
+L	         Roll Right	
+U            Yaw Clock wise (Rotate Clockwise)
+O            Yaw Counter Clock wise (Rotate Counter Clockwise)        
+A	         Arm/Disarm
+H            Enable PD controlled altitude control
+Space bar    Disable PD controlled altitude control
+Q            Request Quit 
 ```
+
+## **Operation Procedure**
+
+- Press Enter to start the simulation
+- Press "A" to arm the motors
+- Press "H" to experience a smooth flight(as it enables PD controlled altitude hold)
+- Press "Arrow Up" to increase the altitude to the desired value (the drone will follow smoothly)
+- Press "Arrow Down" to decrease the altitude
+- Press "I" and "K" to move forward and backward respectively
+- Press "J" and "L" to move left and right respectively
+- Press "U" and "O" to generate clockwise and counterclockwise movement in the drone
+
 
 ## **📐 Technical Details**
 ```bash
