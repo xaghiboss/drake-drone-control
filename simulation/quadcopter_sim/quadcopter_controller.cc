@@ -194,13 +194,13 @@ void QuadcopterController::CalcSpatialForces(
   // ========================================================================
   
   // X-CONFIGURATION rotor positions (45° diagonals)
-  const double arm_diag = arm_length * 0.7071;  // arm_length / sqrt(2)
+  //const double arm_diag = arm_length * 0.7071;  // arm_length / sqrt(2)
 
   const std::vector<Eigen::Vector3d> rotor_positions = {
-      {arm_diag, -arm_diag, 0.0},    // Blue - Front-Right diagonal
-      {arm_diag, arm_diag, 0.0},     // Red - Front-Left diagonal
-      {-arm_diag, -arm_diag, 0.0},   // Yellow - Back-Right diagonal
-      {-arm_diag, arm_diag, 0.0}     // Green - Back-Left diagonal
+      {arm_length, -arm_length, 0.0},    // Blue - Front-Right diagonal
+      {arm_length, arm_length, 0.0},     // Red - Front-Left diagonal
+      {-arm_length, -arm_length, 0.0},   // Yellow - Back-Right diagonal
+      {-arm_length, arm_length, 0.0}     // Green - Back-Left diagonal
   };
   
   auto& output = 
@@ -236,8 +236,7 @@ void QuadcopterController::CalcSpatialForces(
 
   // Apply yaw torque as pure moment (this is the ONLY way to create yaw)
   if (std::abs(yaw_torque) > 1e-12) {
-    const double max_yaw_torque = 0.1;  // Clamp to safe value
-    const double yaw_torque_safe = std::clamp(yaw_torque, -max_yaw_torque, max_yaw_torque);
+    const double yaw_torque_safe = yaw_torque_clamped;
     
     drake::multibody::ExternallyAppliedSpatialForce<double> yaw_moment;
     yaw_moment.body_index = drone_body_->index();
