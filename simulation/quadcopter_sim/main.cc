@@ -122,7 +122,7 @@ int main() {
   std::cout << " • a                  : Arm/Disarm" << std::endl;
   std::cout << " • q                  : Quit" << std::endl;
   std::cout << "\n═══════════════════════════════════════════════════" << std::endl;
-  std::cout << "\n✨ FEATURES:" << std::endl;
+  std::cout << "\n FEATURES:" << std::endl;
   std::cout << " • BALANCED stabilization - stable takeoff + responsive control" << std::endl;
   std::cout << " • AUTO-HOVER: Press 'h' to lock altitude" << std::endl;
   std::cout << " • Release keys → Auto-levels smoothly" << std::endl;
@@ -145,10 +145,10 @@ int main() {
   const double thrust_inc = 0.5;  // Thrust increment (N)
   
   // Auto-hover state
-  bool auto_hover_enabled = false;
+  bool auto_hover_enabled = true;
   double hover_target_altitude = 0.0;
-  const double kp_altitude = 3.0;    // Proportional gain for altitude hold
-  const double kd_altitude = 2.0;    // Derivative gain (damping)
+  const double kp_altitude = 8.0;    // Proportional gain for altitude hold
+  const double kd_altitude = 3.0;    // Derivative gain (damping)
   double last_altitude = 0.0;
   
   // Angle setpoints (rad) - drone will auto-level to these when keys released
@@ -159,14 +159,14 @@ int main() {
   double target_pitch = 0;
   double target_yaw = 0.0;  // ADD THIS LINE - yaw should also decay!
   
-  const double max_angle = 0.4;   // Maximum tilt ~23 degrees (higher for agility)
-  const double angle_inc = 0.05;  // Angle increment per key press (very responsive)
+  const double max_angle = 0.6;   // Maximum tilt ~23 degrees (higher for agility)
+  const double angle_inc = 0.1;  // Angle increment per key press (very responsive)
   
   bool armed = false;
   bool running = true;
 
   // Control input vector: 4 elements [thrust, roll_angle, pitch_angle, yaw_angle]
-  Eigen::Matrix<double, 4, 1> control_input;
+  Eigen::Vector4d control_input;
   control_input.setZero();
   
   // Track time for periodic status updates
@@ -247,19 +247,13 @@ int main() {
 
         // ========================================================================
     // ANGLE CONTROL (i/k/j/l/u/o keys)
-    // KEY BEHAVIOR: Angles decay toward zero when no key pressed
-    // This creates auto-leveling: release key → angle → 0 → drone levels
     // ========================================================================
     
-    // BALANCED auto-decay for smooth stopping without instability
-    // Moderate decay = stable takeoff + responsive stopping
-        // BALANCED auto-decay for smooth stopping without instability
-    const double decay_factor = 0.70;  // 30% decay per frame
     
     // Apply decay ONLY if no keys are pressed
     bool pitch_key_pressed = (key == 'i' || key == 'I' || key == 'k' || key == 'K');
     bool roll_key_pressed = (key == 'j' || key == 'J' || key == 'l' || key == 'L');
-    bool yaw_key_pressed = (key == 'u' || key == 'U' || key == 'o' || key == 'O');
+    //bool yaw_key_pressed = (key == 'u' || key == 'U' || key == 'o' || key == 'O');
     
     if (!pitch_key_pressed && !roll_key_pressed) {
       target_roll *= decay_factor;
@@ -283,8 +277,6 @@ int main() {
       world_right += angle_inc;
     }
 
-    // DYNAMIC TRANSFORMATION: Convert world commands to body frame
-    // using CURRENT drone yaw (not a fixed 45°!)
     double current_yaw = 0.0;
     if (armed && sim_time > 0.01) {
       auto& current_plant_context = plant.GetMyMutableContextFromRoot(&root_context);
@@ -294,13 +286,9 @@ int main() {
       current_yaw = current_rpy.yaw_angle();
     }
 
-    // Rotate world commands by -current_yaw to get body frame commands
-    // This makes i/j/k/l ALWAYS move in world directions regardless of yaw
-    const double cos_yaw = std::cos(-current_yaw);
-    const double sin_yaw = std::sin(-current_yaw);
 
-    target_pitch += cos_yaw * world_forward - sin_yaw * world_right;
-    target_roll += sin_yaw * world_forward + cos_yaw * world_right;
+    target_pitch += world_forward - world_right;
+    target_roll += world_forward + world_right;
 
     // Clamp to limits
     target_pitch = std::clamp(target_pitch, -max_angle, max_angle);
@@ -308,14 +296,14 @@ int main() {
 
     // YAW CONTROL
     if (key == 'u' || key == 'U') {
-      target_yaw += angle_inc * 0.2;
+      target_yaw += angle_inc ;
     } else if (key == 'o' || key == 'O') {
-      target_yaw -= angle_inc * 0.2;
+      target_yaw -= angle_inc ;
     }
     
     // Normalize yaw to [-π, π]
-    while (target_yaw > M_PI) target_yaw -= 2.0 * M_PI;
-    while (target_yaw < -M_PI) target_yaw += 2.0 * M_PI;
+    //while (target_yaw > M_PI) target_yaw -= 2.0 * M_PI;
+    //while (target_yaw < -M_PI) target_yaw += 2.0 * M_PI;
     
     // Zero out very small angles (dead zone for cleaner behavior)
     if (std::abs(target_roll) < 0.005) target_roll = 0.0;
