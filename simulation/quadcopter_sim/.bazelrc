@@ -1,2 +1,4 @@
 build --cxxopt=-std=c++20
 build --host_cxxopt=-std=c++20
+build --enable_bzlmod=true
+build --enable_workspace=true

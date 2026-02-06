@@ -13,6 +13,8 @@
 #include "drake/multibody/plant/multibody_plant.h"
 #include "drake/multibody/tree/spatial_inertia.h"
 
+#include "drake/multibody/tree/fixed_offset_frame.h"
+
 using drake::math::RigidTransformd;
 using drake::math::RotationMatrix;
 using drake::multibody::MultibodyPlant;
@@ -71,6 +73,43 @@ const multibody::RigidBody<double>& AddQuadcopterModel(
       total_mass, Eigen::Vector3d::Zero(), J);
 
   const auto& body = plant->AddRigidBody("quadcopter_body", M_Bcm);
+
+  
+  // ========================================================================
+  // ADD FPV CAMERA FRAME (simplified - just marks the attachment point)
+  // ========================================================================
+  
+  // Add camera frame at body origin (transform will be in main.cc)
+  plant->AddFrame(
+      std::make_unique<multibody::FixedOffsetFrame<double>>(
+          "fpv_camera",
+          body.body_frame(),
+          math::RigidTransformd()  // Identity - camera offset in main.cc
+      )
+  );
+  
+  // Visual representation of camera
+  const Eigen::Vector3d camera_position(0.05, 0.0, 0.02);
+  
+  // Optional: Visual camera box (just for looks)
+  const Eigen::Vector3d camera_vis_pos(0.08, 0.0, 0.02);  // Front center
+  plant->RegisterVisualGeometry(
+      body,
+      math::RigidTransformd(camera_vis_pos),
+      geometry::Box(0.015, 0.020, 0.008),
+      "camera_body",
+      drake::Vector4<double>(0.1, 0.1, 0.1, 1.0)
+  );
+  
+  const Eigen::Vector3d lens_pos = camera_position + Eigen::Vector3d(0.012, 0, 0);
+  plant->RegisterVisualGeometry(
+      body,
+      math::RigidTransformd(lens_pos),
+      geometry::Sphere(0.004),
+      "camera_lens",
+      drake::Vector4<double>(0.2, 0.4, 0.9, 1.0)
+  );
+   //==== original version ======
 
   // ===== COLLISION GEOMETRY =====
   const double collision_box_x = arm_length * 2.0;

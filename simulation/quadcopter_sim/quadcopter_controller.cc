@@ -231,7 +231,7 @@ void QuadcopterController::CalcSpatialForces(
   push_rotor(rotor_positions[3], f_green);   // Back-Left
   
   // Clamp yaw torque to safe limits
-  const double max_yaw_torque = 0.05;  // Experiment with this value
+  const double max_yaw_torque = 0.5;  // Experiment with this value
   const double yaw_torque_clamped = std::clamp(yaw_torque, -max_yaw_torque, max_yaw_torque);
 
   // Apply yaw torque as pure moment (this is the ONLY way to create yaw)

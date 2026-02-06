@@ -21,11 +21,20 @@
 #include "drake/systems/framework/diagram_builder.h"
 #include "drake/common/value.h"
 #include "drake/systems/framework/basic_vector.h"
+#include "drake/geometry/render_vtk/factory.h"
+
+#include "drake/systems/sensors/rgbd_sensor.h"
+#include "drake/geometry/render/render_camera.h"
+#include "drake/multibody/tree/fixed_offset_frame.h"
+#include "camera_viewer.h"
+#include "drake/systems/sensors/camera_info.h"
 
 #include "keyboard_input.h"
 #include "quadcopter_controller.h"
 #include "quadcopter_model.h"
 #include "world.h"
+
+
 
 using namespace drake;
 
@@ -36,10 +45,93 @@ int main() {
   auto [plant, scene_graph] =
       multibody::AddMultibodyPlantSceneGraph(&builder, 0.001);
 
+  // ========================================================================
+  // ADD RENDERER (do this BEFORE adding models)
+  // ========================================================================
+  geometry::RenderEngineVtkParams params;
+  params.default_clear_color = Eigen::Vector3d(0.53, 0.81, 0.92);  // Sky blue
+  scene_graph.AddRenderer("renderer", geometry::MakeRenderEngineVtk(params));
+  std::cout << "Renderer added to SceneGraph" << std::endl;
+
+  // ========================================================================
+  // ADD MODELS
+  // ========================================================================
   const auto& drone_body = AddQuadcopterModel(&plant, &scene_graph);
   AddGroundWithCollision(&plant, &scene_graph, /*ground_z=*/-0.01);
 
+
+
+
   plant.Finalize();
+
+  // ========================================================================
+  // ADD FPV CAMERA (attached to drone body, facing forward and down)
+  // ========================================================================
+  
+  std::cout << "Setting up FPV camera..." << std::endl;
+  
+  // Get drone body frame ID
+  const geometry::FrameId drone_frame_id = 
+      plant.GetBodyFrameIdOrThrow(drone_body.index());
+  
+  // Camera position and orientation (in body frame)
+  // Position: 8cm forward (+X), centered in Y, 2cm up (+Z)
+  // Orientation: Tilted 30° DOWN to see ground better
+const Eigen::Vector3d camera_position(0.03, -0.03, 0.06);   // 5cm up
+  
+  // Camera orientation:
+  // - Roll: 0° (keep upright)
+  // - Pitch: -20° (tilt down to see ground)
+  // - Yaw: 0° (face forward along +X axis)
+  const double camera_roll = 0.0 * M_PI / 180.0;  ;                      // Upright
+  const double camera_pitch = -135.0 * M_PI / 180.0;    // 20° down
+  const double camera_yaw = 135.0 * M_PI / 180.0;                      // Face forward (+X)
+  
+  const math::RigidTransformd X_BC(
+      math::RollPitchYaw<double>(camera_roll, camera_pitch, camera_yaw),
+      camera_position
+  );
+
+  // Camera settings
+  const int width = 480;
+  const int height = 640;
+  const double fov = 90.0 * M_PI / 180.0;  // Wide FOV
+  
+  // Create depth camera (simple constructor)
+  geometry::render::DepthRenderCamera depth_camera(
+      {"renderer", {width, height, fov}, {0.01, 100.0}, {}},  // near=5cm, far=50m
+      {0.01, 100.0}
+  );
+  
+  // Create RgbdSensor (3-argument constructor)
+  auto* camera = builder.AddSystem<systems::sensors::RgbdSensor>(
+      drone_frame_id,
+      X_BC,           // Camera offset from drone body
+      depth_camera
+  );
+  camera->set_name("fpv_camera");
+  
+  // Connect to scene graph
+  builder.Connect(
+      scene_graph.get_query_output_port(),
+      camera->query_object_input_port()
+  );
+  
+  // Add viewer
+  auto* viewer = builder.AddSystem<systems::CameraViewer>("FPV Camera", 30.0);
+  builder.Connect(
+      camera->color_image_output_port(),
+      viewer->get_input_port(0)
+  );
+  
+  std::cout << "FPV camera ready!" << std::endl;
+  //--- fpv camera code ends
+
+
+
+
+
+  
 
   auto controller = builder.AddSystem<systems::QuadcopterController>(
       &plant, &drone_body);

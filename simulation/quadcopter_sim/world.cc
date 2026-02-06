@@ -12,46 +12,46 @@ using drake::Vector4;
 
 namespace drake {
 
-void AddGroundWithCollision(
-    MultibodyPlant<double>* plant,
-    geometry::SceneGraph<double>* /*scene_graph*/,
-    double ground_z) {
-  // Register collision geometry (HalfSpace) on the world so bodies collide with ground.
-  // Place the half space so the top plane is at z = ground_z.
+void AddGroundWithCollision(multibody::MultibodyPlant<double>* plant,
+                           geometry::SceneGraph<double>* scene_graph,
+                           double ground_z) {
+  
+  const Eigen::Vector4d ground_color(0.3, 0.6, 0.3, 1.0);  // Green
+  const Eigen::Vector4d grid_color(0.5, 0.5, 0.5, 1.0);    // Gray
+  
+  // Ground collision (half-space)
   plant->RegisterCollisionGeometry(
       plant->world_body(),
-      RigidTransformd(Eigen::Vector3d(0, 0, ground_z)),
+      math::RigidTransformd(Eigen::Vector3d(0, 0, ground_z)),
       geometry::HalfSpace(),
       "ground_collision",
-      multibody::CoulombFriction<double>(0.9, 0.9));
-
-  // Visual ground plane (thin box) slightly below the halfspace plane for rendering.
-  const double ground_thickness = 0.01;
-  const double ground_half_extents = 30.0;
+      geometry::ProximityProperties());
+  
+  // Ground visual (large box so camera can see it)
   plant->RegisterVisualGeometry(
       plant->world_body(),
-      RigidTransformd(Eigen::Vector3d(0, 0, ground_z - ground_thickness / 2.0)),
-      geometry::Box(ground_half_extents, ground_half_extents, ground_thickness),
+      math::RigidTransformd(Eigen::Vector3d(0, 0, ground_z - 0.5)),
+      geometry::Box(20.0, 20.0, 1.0),  // 20m x 20m x 1m thick
       "ground_visual",
-      Vector4<double>(0.2, 0.4, 0.2, 1.0));  // greenish
-
-  // Optional: grid lines for depth perception (visual only)
-  const int grid_count = 10;
-  const double grid_spacing = 2.0;
-  const double line_width = 0.02;
-  for (int i = -grid_count; i <= grid_count; ++i) {
+      ground_color);
+  
+  // Grid lines (optional, helps with depth perception)
+  for (int i = -10; i <= 10; ++i) {
+    // Lines along X
     plant->RegisterVisualGeometry(
         plant->world_body(),
-        RigidTransformd(Eigen::Vector3d(0, i * grid_spacing, ground_z + 0.0005)),
-        geometry::Box(grid_spacing * grid_count * 2, line_width, 0.001),
+        math::RigidTransformd(Eigen::Vector3d(0, i, ground_z + 0.01)),
+        geometry::Box(20.0, 0.02, 0.01),
         "grid_x_" + std::to_string(i),
-        Vector4<double>(0.15, 0.3, 0.15, 1.0));
+        grid_color);
+    
+    // Lines along Y
     plant->RegisterVisualGeometry(
         plant->world_body(),
-        RigidTransformd(Eigen::Vector3d(i * grid_spacing, 0, ground_z + 0.0005)),
-        geometry::Box(line_width, grid_spacing * grid_count * 2, 0.001),
+        math::RigidTransformd(Eigen::Vector3d(i, 0, ground_z + 0.01)),
+        geometry::Box(0.02, 20.0, 0.01),
         "grid_y_" + std::to_string(i),
-        Vector4<double>(0.15, 0.3, 0.15, 1.0));
+        grid_color);
   }
 }
 

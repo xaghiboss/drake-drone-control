@@ -69,8 +69,8 @@ class QuadcopterController : public LeafSystem<double> {
   const double kp_rate_pitch_ = 50.0;    // Reduced from 0.25
   const double kd_rate_pitch_ = 35;    // Reduced from 0.015
   
-  const double kp_rate_yaw_ = 0.5;      // Keep moderate
-  const double kd_rate_yaw_ = 0.05;     // Keep moderate
+  const double kp_rate_yaw_ = 5.0;      // Keep moderate
+  const double kd_rate_yaw_ = 1.5;     // Keep moderate
 };
 
 }  // namespace systems
