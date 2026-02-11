@@ -77,7 +77,7 @@ int main() {
   // Camera position and orientation (in body frame)
   // Position: 8cm forward (+X), centered in Y, 2cm up (+Z)
   // Orientation: Tilted 30° DOWN to see ground better
-const Eigen::Vector3d camera_position(0.03, -0.03, 0.06);   // 5cm up
+  const Eigen::Vector3d camera_position(0.03, -0.03, 0.06);   // 5cm up
   
   // Camera orientation:
   // - Roll: 0° (keep upright)
@@ -246,7 +246,7 @@ const Eigen::Vector3d camera_position(0.03, -0.03, 0.06);   // 5cm up
   // Angle setpoints (rad) - drone will auto-level to these when keys released
   // When no key pressed, these decay to zero → drone levels out
   // BALANCED auto-decay for smooth stopping without instability
-  const double decay_factor = 0.85;  // 15% decay per frame
+  // const double decay_factor = 0.85;  // 15% decay per frame
   double target_roll = 0;
   double target_pitch = 0;
   double target_yaw = 0.0;  // ADD THIS LINE - yaw should also decay!
@@ -337,60 +337,35 @@ const Eigen::Vector3d camera_position(0.03, -0.03, 0.06);   // 5cm up
       }
     }
 
-        // ========================================================================
-    // ANGLE CONTROL (i/k/j/l/u/o keys)
+    // ========================================================================
+    // ANGLE CONTROL (i/k/j/l/u/o keys) - DIRECT STICK MAPPING (Angle Mode)
     // ========================================================================
     
+    // Stick deflection: 1.0, -1.0, or 0.0 (like a real RC transmitter)
+    double pitch_stick = 0.0;
+    double roll_stick = 0.0;
     
-    // Apply decay ONLY if no keys are pressed
-    bool pitch_key_pressed = (key == 'i' || key == 'I' || key == 'k' || key == 'K');
-    bool roll_key_pressed = (key == 'j' || key == 'J' || key == 'l' || key == 'L');
-    //bool yaw_key_pressed = (key == 'u' || key == 'U' || key == 'o' || key == 'O');
-    
-    if (!pitch_key_pressed && !roll_key_pressed) {
-      target_roll *= decay_factor;
-      target_pitch *= decay_factor;
-    }
-    
-    // User input in WORLD FRAME (what the pilot expects)
-    double world_forward = 0.0;
-    double world_right = 0.0;
-    
-    // Apply key inputs
     if (key == 'i' || key == 'I') {
-      world_forward += angle_inc;
+      pitch_stick = 1.0;    // Forward
     } else if (key == 'k' || key == 'K') {
-      world_forward -= angle_inc;
+      pitch_stick = -1.0;   // Backward
     }
 
     if (key == 'j' || key == 'J') {
-      world_right -= angle_inc;
+      roll_stick = -1.0;    // Left
     } else if (key == 'l' || key == 'L') {
-      world_right += angle_inc;
+      roll_stick = 1.0;     // Right
     }
 
-    double current_yaw = 0.0;
-    if (armed && sim_time > 0.01) {
-      auto& current_plant_context = plant.GetMyMutableContextFromRoot(&root_context);
-      const math::RigidTransformd current_pose = 
-          plant.GetFreeBodyPose(current_plant_context, drone_body);
-      const math::RollPitchYaw<double> current_rpy(current_pose.rotation());
-      current_yaw = current_rpy.yaw_angle();
-    }
+    // Direct mapping: stick position = target angle (no accumulation, no decay)
+    target_pitch = pitch_stick * max_angle;
+    target_roll = roll_stick * max_angle;
 
-
-    target_pitch += world_forward - world_right;
-    target_roll += world_forward + world_right;
-
-    // Clamp to limits
-    target_pitch = std::clamp(target_pitch, -max_angle, max_angle);
-    target_roll = std::clamp(target_roll, -max_angle, max_angle);
-
-    // YAW CONTROL
+    // YAW CONTROL (yaw is intentionally accumulative — it's a heading reference)
     if (key == 'u' || key == 'U') {
-      target_yaw += angle_inc ;
+      target_yaw += angle_inc;
     } else if (key == 'o' || key == 'O') {
-      target_yaw -= angle_inc ;
+      target_yaw -= angle_inc;
     }
     
     // Normalize yaw to [-π, π]
@@ -449,20 +424,15 @@ const Eigen::Vector3d camera_position(0.03, -0.03, 0.06);   // 5cm up
       simulator.AdvanceTo(sim_time + dt);
       sim_time += dt;
       
-      // Print status every 1 second
-      if (sim_time - last_print_time >= 1.0) {
+      // Print status every 2 second
+      if (sim_time - last_print_time >= 2.0) {
         auto& current_plant_context = plant.GetMyMutableContextFromRoot(&root_context);
         const math::RigidTransformd current_pose = 
             plant.GetFreeBodyPose(current_plant_context, drone_body);
         const Eigen::Vector3d pos = current_pose.translation();
         const math::RollPitchYaw<double> current_rpy(current_pose.rotation());
         
-        std::cout << "t=" << std::fixed << std::setprecision(1) << sim_time 
-                  << " | Thrust=" << std::setprecision(1) << thrust << "N";
-        
-        if (auto_hover_enabled) {
-          std::cout << " [HOVER@" << std::setprecision(2) << hover_target_altitude << "m]";
-        }
+        std::cout << "Thrust=" << std::setprecision(1) << thrust << "N";
         
         std::cout << " | Alt=" << std::setprecision(2) << pos(2) << "m"
                   << " | Angle=[" << std::setprecision(1)

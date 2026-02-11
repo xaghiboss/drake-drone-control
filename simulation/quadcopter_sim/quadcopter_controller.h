@@ -63,14 +63,19 @@ class QuadcopterController : public LeafSystem<double> {
   
   // INNER LOOP: Rate → Torque (PD control)
   // Balanced P and D for responsive yet stable control
-  const double kp_rate_roll_ = 50.0;     // Reduced from 0.25
-  const double kd_rate_roll_ = 35;     // Reduced from 0.015
+  const double kp_rate_roll_ = 18.0;     // Reduced from 0.25
+  const double kd_rate_roll_ = 8;     // Reduced from 0.015
   
-  const double kp_rate_pitch_ = 50.0;    // Reduced from 0.25
-  const double kd_rate_pitch_ = 35;    // Reduced from 0.015
+  const double kp_rate_pitch_ = 18.0;    // Reduced from 0.25
+  const double kd_rate_pitch_ = 8;    // Reduced from 0.015
   
   const double kp_rate_yaw_ = 5.0;      // Keep moderate
   const double kd_rate_yaw_ = 1.5;     // Keep moderate
+  
+  // Physical constants
+  const double drone_mass_ = 0.5;
+  const double gravity_ = 9.81;
+  const double hover_thrust_ = drone_mass_ * gravity_;
 };
 
 }  // namespace systems

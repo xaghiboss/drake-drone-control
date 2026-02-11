@@ -44,11 +44,11 @@ const multibody::RigidBody<double>& AddQuadcopterModel(
   const double Iyy_center = (1.0 / 12.0) * m_center * (body_x*body_x + body_z*body_z);
   const double Izz_center = (1.0 / 12.0) * m_center * (body_x*body_x + body_y*body_y);
 
-  // Motor positions (CROSS configuration)
-  const Eigen::Vector3d p_front( arm_length, 0.0, 0.0);   // +X (FORWARD)
-  const Eigen::Vector3d p_back( -arm_length, 0.0, 0.0);   // -X (BACKWARD)
-  const Eigen::Vector3d p_left( 0.0,  arm_length, 0.0);   // +Y (LEFT)
-  const Eigen::Vector3d p_right(0.0, -arm_length, 0.0);   // -Y (RIGHT)
+  // Motor positions (X-CONFIGURATION - motors on diagonals)
+  const Eigen::Vector3d p_fr( arm_length, -arm_length, 0.0);  // Blue  - Front-Right
+  const Eigen::Vector3d p_fl( arm_length,  arm_length, 0.0);  // Red   - Front-Left
+  const Eigen::Vector3d p_br(-arm_length, -arm_length, 0.0);  // Yellow - Back-Right
+  const Eigen::Vector3d p_bl(-arm_length,  arm_length, 0.0);  // Green - Back-Left
 
   // Start with central inertia
   double Ixx = Ixx_center;
@@ -62,10 +62,10 @@ const multibody::RigidBody<double>& AddQuadcopterModel(
     Izz += m * (p.x()*p.x() + p.y()*p.y());
   };
 
-  add_point_mass_inertia(p_front, m_motor);
-  add_point_mass_inertia(p_back,  m_motor);
-  add_point_mass_inertia(p_left,  m_motor);
-  add_point_mass_inertia(p_right, m_motor);
+  add_point_mass_inertia(p_fr, m_motor);
+  add_point_mass_inertia(p_fl, m_motor);
+  add_point_mass_inertia(p_br, m_motor);
+  add_point_mass_inertia(p_bl, m_motor);
 
   // Build spatial inertia
   RotationalInertia<double> J(Ixx, Iyy, Izz, 0.0, 0.0, 0.0);
@@ -74,25 +74,19 @@ const multibody::RigidBody<double>& AddQuadcopterModel(
 
   const auto& body = plant->AddRigidBody("quadcopter_body", M_Bcm);
 
-  
   // ========================================================================
-  // ADD FPV CAMERA FRAME (simplified - just marks the attachment point)
+  // ADD FPV CAMERA FRAME
   // ========================================================================
-  
-  // Add camera frame at body origin (transform will be in main.cc)
   plant->AddFrame(
       std::make_unique<multibody::FixedOffsetFrame<double>>(
           "fpv_camera",
           body.body_frame(),
-          math::RigidTransformd()  // Identity - camera offset in main.cc
+          math::RigidTransformd()
       )
   );
   
-  // Visual representation of camera
   const Eigen::Vector3d camera_position(0.05, 0.0, 0.02);
-  
-  // Optional: Visual camera box (just for looks)
-  const Eigen::Vector3d camera_vis_pos(0.08, 0.0, 0.02);  // Front center
+  const Eigen::Vector3d camera_vis_pos(0.08, 0.0, 0.02);
   plant->RegisterVisualGeometry(
       body,
       math::RigidTransformd(camera_vis_pos),
@@ -109,7 +103,6 @@ const multibody::RigidBody<double>& AddQuadcopterModel(
       "camera_lens",
       drake::Vector4<double>(0.2, 0.4, 0.9, 1.0)
   );
-   //==== original version ======
 
   // ===== COLLISION GEOMETRY =====
   const double collision_box_x = arm_length * 2.0;
@@ -123,17 +116,17 @@ const multibody::RigidBody<double>& AddQuadcopterModel(
       multibody::CoulombFriction<double>(0.5, 0.5));
 
   const double rotor_collision_r = 0.03;
-  plant->RegisterCollisionGeometry(body, RigidTransformd(p_front),
-      geometry::Sphere(rotor_collision_r), "rotor_collision_front",
+  plant->RegisterCollisionGeometry(body, RigidTransformd(p_fr),
+      geometry::Sphere(rotor_collision_r), "rotor_collision_fr",
       multibody::CoulombFriction<double>(0.5, 0.5));
-  plant->RegisterCollisionGeometry(body, RigidTransformd(p_back),
-      geometry::Sphere(rotor_collision_r), "rotor_collision_back",
+  plant->RegisterCollisionGeometry(body, RigidTransformd(p_fl),
+      geometry::Sphere(rotor_collision_r), "rotor_collision_fl",
       multibody::CoulombFriction<double>(0.5, 0.5));
-  plant->RegisterCollisionGeometry(body, RigidTransformd(p_left),
-      geometry::Sphere(rotor_collision_r), "rotor_collision_left",
+  plant->RegisterCollisionGeometry(body, RigidTransformd(p_br),
+      geometry::Sphere(rotor_collision_r), "rotor_collision_br",
       multibody::CoulombFriction<double>(0.5, 0.5));
-  plant->RegisterCollisionGeometry(body, RigidTransformd(p_right),
-      geometry::Sphere(rotor_collision_r), "rotor_collision_right",
+  plant->RegisterCollisionGeometry(body, RigidTransformd(p_bl),
+      geometry::Sphere(rotor_collision_r), "rotor_collision_bl",
       multibody::CoulombFriction<double>(0.5, 0.5));
 
   // ===== VISUAL GEOMETRY =====
@@ -148,56 +141,65 @@ const multibody::RigidBody<double>& AddQuadcopterModel(
       geometry::Box(body_size, body_size, 0.006),
       "top_plate", Vector4<double>(0.2, 0.2, 0.2, 1.0));
 
-  // Arms with directional color coding
+  // Arms as diagonals (X-configuration)
+  // Each arm goes from center to a diagonal corner
   const double arm_width = 0.02;
-  const double arm_length_visual = arm_length;
+  const double arm_diag_length = std::sqrt(2.0) * arm_length;  // Diagonal length
   
-  // Front arm (+X) - BRIGHT BLUE
+  // Front-Right arm (center to FR) - BLUE
   plant->RegisterVisualGeometry(
-      body, RigidTransformd(Eigen::Vector3d(arm_length_visual/2.0, 0, 0)),
-      geometry::Box(arm_length_visual, arm_width, 0.004),
-      "arm_front", Vector4<double>(0.2, 0.4, 1.0, 1.0));  // Blue
+      body, RigidTransformd(
+          math::RotationMatrixd::MakeZRotation(-M_PI / 4.0),
+          Eigen::Vector3d(arm_length / 2.0, -arm_length / 2.0, 0)),
+      geometry::Box(arm_diag_length, arm_width, 0.004),
+      "arm_fr", Vector4<double>(0.2, 0.4, 1.0, 1.0));  // Blue
   
-  // Back arm (-X) - GREEN
+  // Front-Left arm (center to FL) - RED
   plant->RegisterVisualGeometry(
-      body, RigidTransformd(Eigen::Vector3d(-arm_length_visual/2.0, 0, 0)),
-      geometry::Box(arm_length_visual, arm_width, 0.004),
-      "arm_back", Vector4<double>(0.2, 0.8, 0.2, 1.0));  // Green
+      body, RigidTransformd(
+          math::RotationMatrixd::MakeZRotation(M_PI / 4.0),
+          Eigen::Vector3d(arm_length / 2.0, arm_length / 2.0, 0)),
+      geometry::Box(arm_diag_length, arm_width, 0.004),
+      "arm_fl", Vector4<double>(1.0, 0.2, 0.2, 1.0));  // Red
   
-  // Left arm (+Y) - RED
+  // Back-Right arm (center to BR) - YELLOW
   plant->RegisterVisualGeometry(
-      body, RigidTransformd(Eigen::Vector3d(0, arm_length_visual/2.0, 0)),
-      geometry::Box(arm_width, arm_length_visual, 0.004),
-      "arm_left", Vector4<double>(1.0, 0.2, 0.2, 1.0));  // Red
+      body, RigidTransformd(
+          math::RotationMatrixd::MakeZRotation(M_PI / 4.0),
+          Eigen::Vector3d(-arm_length / 2.0, -arm_length / 2.0, 0)),
+      geometry::Box(arm_diag_length, arm_width, 0.004),
+      "arm_br", Vector4<double>(1.0, 1.0, 0.2, 1.0));  // Yellow
   
-  // Right arm (-Y) - YELLOW
+  // Back-Left arm (center to BL) - GREEN
   plant->RegisterVisualGeometry(
-      body, RigidTransformd(Eigen::Vector3d(0, -arm_length_visual/2.0, 0)),
-      geometry::Box(arm_width, arm_length_visual, 0.004),
-      "arm_right", Vector4<double>(1.0, 1.0, 0.2, 1.0));  // Yellow
+      body, RigidTransformd(
+          math::RotationMatrixd::MakeZRotation(-M_PI / 4.0),
+          Eigen::Vector3d(-arm_length / 2.0, arm_length / 2.0, 0)),
+      geometry::Box(arm_diag_length, arm_width, 0.004),
+      "arm_bl", Vector4<double>(0.2, 0.8, 0.2, 1.0));  // Green
 
-  // Rotor spheres with matching colors (larger for visibility)
+  // Rotor spheres at diagonal positions
   const double rotor_vis_r = 0.025;
   
-  // FRONT rotor (+X) - BRIGHT BLUE
-  plant->RegisterVisualGeometry(body, RigidTransformd(p_front),
-      geometry::Sphere(rotor_vis_r), "rotor_front", 
+  // BLUE - Front-Right
+  plant->RegisterVisualGeometry(body, RigidTransformd(p_fr),
+      geometry::Sphere(rotor_vis_r), "rotor_fr", 
       Vector4<double>(0.2, 0.4, 1.0, 1.0));
   
-  // BACK rotor (-X) - GREEN
-  plant->RegisterVisualGeometry(body, RigidTransformd(p_back),
-      geometry::Sphere(rotor_vis_r), "rotor_back", 
-      Vector4<double>(0.2, 0.8, 0.2, 1.0));
-  
-  // LEFT rotor (+Y) - RED
-  plant->RegisterVisualGeometry(body, RigidTransformd(p_left),
-      geometry::Sphere(rotor_vis_r), "rotor_left", 
+  // RED - Front-Left
+  plant->RegisterVisualGeometry(body, RigidTransformd(p_fl),
+      geometry::Sphere(rotor_vis_r), "rotor_fl", 
       Vector4<double>(1.0, 0.2, 0.2, 1.0));
   
-  // RIGHT rotor (-Y) - YELLOW
-  plant->RegisterVisualGeometry(body, RigidTransformd(p_right),
-      geometry::Sphere(rotor_vis_r), "rotor_right", 
+  // YELLOW - Back-Right
+  plant->RegisterVisualGeometry(body, RigidTransformd(p_br),
+      geometry::Sphere(rotor_vis_r), "rotor_br", 
       Vector4<double>(1.0, 1.0, 0.2, 1.0));
+  
+  // GREEN - Back-Left
+  plant->RegisterVisualGeometry(body, RigidTransformd(p_bl),
+      geometry::Sphere(rotor_vis_r), "rotor_bl", 
+      Vector4<double>(0.2, 0.8, 0.2, 1.0));
 
   return body;
 }
