@@ -143,48 +143,51 @@ void QuadcopterController::CalcSpatialForces(
   //   LEFT:     Blue↑ Yellow↑, Red↓ Green↓  (roll left)
   //   RIGHT:    Blue↓ Yellow↓, Red↑ Green↑  (roll right)
   
-  // ========================================================================
-  // DIFFERENTIAL THRUST MIXING
-  // ========================================================================
+  const double arm_length = 0.15;  // meters
   
-  const double arm_length = 0.15;
+  // Baseline: equal thrust on all rotors
   const double base_thrust_per_rotor = total_thrust / 4.0;
   
-  const double pitch_diff = pitch_torque / (4.0 * arm_length);
-  const double roll_diff = roll_torque / (4.0 * arm_length);
+  // Convert torques to differential thrust amounts
+  // Positive pitch_torque = pitch forward = front motors decrease, back motors increase
+  // Positive roll_torque = roll right = right motors decrease, left motors increase
   
-  double f_blue   = base_thrust_per_rotor - pitch_diff - roll_diff;
-  double f_red    = base_thrust_per_rotor - pitch_diff + roll_diff;
-  double f_yellow = base_thrust_per_rotor + pitch_diff - roll_diff;
-  double f_green  = base_thrust_per_rotor + pitch_diff + roll_diff;
+  const double pitch_diff = pitch_torque / (4.0 * arm_length);  // Split across 2 motor pairs
+  const double roll_diff = roll_torque / (4.0 * arm_length);    // Split across 2 motor pairs
+  // const double yaw_diff = yaw_torque / 4.0;
   
-  // Clamp to physical limits
+  // REAL DRONE DIFFERENTIAL THRUST MIXING:
+  // 
+  // Blue (Front-Right):
+  //   - Part of FRONT pair (for pitch): pitch forward → decrease
+  //   - Part of RIGHT pair (for roll): roll right → decrease
+  //   - CW propeller: yaw right → decrease
+  double f_blue = base_thrust_per_rotor - pitch_diff - roll_diff;
+  
+  // Red (Front-Left):
+  //   - Part of FRONT pair (for pitch): pitch forward → decrease
+  //   - Part of LEFT pair (for roll): roll right → increase
+  //   - CCW propeller: yaw right → increase
+  double f_red = base_thrust_per_rotor - pitch_diff + roll_diff ;
+  
+  // Yellow (Back-Right):
+  //   - Part of BACK pair (for pitch): pitch forward → increase
+  //   - Part of RIGHT pair (for roll): roll right → decrease
+  //   - CCW propeller: yaw right → increase
+  double f_yellow = base_thrust_per_rotor + pitch_diff - roll_diff ;
+  
+  // Green (Back-Left):
+  //   - Part of BACK pair (for pitch): pitch forward → increase
+  //   - Part of LEFT pair (for roll): roll right → increase
+  //   - CW propeller: yaw right → decrease
+  double f_green = base_thrust_per_rotor + pitch_diff + roll_diff ;
+  
+  // Clamp to physical limits (assumed: 1000 KV motor generating an almost 12.753 N of thrust)
   const double max_single_rotor = 12.7;
-  f_blue   = std::clamp(f_blue,   0.0, max_single_rotor);
-  f_red    = std::clamp(f_red,    0.0, max_single_rotor);
+  f_blue = std::clamp(f_blue, 0.0, max_single_rotor);
+  f_red = std::clamp(f_red, 0.0, max_single_rotor);
   f_yellow = std::clamp(f_yellow, 0.0, max_single_rotor);
-  f_green  = std::clamp(f_green,  0.0, max_single_rotor);
-  
-  // ========================================================================
-  // RESCALE: ensure total motor force = commanded total_thrust
-  // Clamping can create unintended net force (phantom thrust).
-  // Rescale all motors proportionally so the sum matches total_thrust.
-  // ========================================================================
-  const double actual_sum = f_blue + f_red + f_yellow + f_green;
-  
-  if (actual_sum > 1e-6 && total_thrust > 1e-6) {
-    const double scale = total_thrust / actual_sum;
-    f_blue   *= scale;
-    f_red    *= scale;
-    f_yellow *= scale;
-    f_green  *= scale;
-  } else if (total_thrust < 1e-6) {
-    // Zero commanded thrust = zero motor output, period.
-    f_blue = 0.0;
-    f_red = 0.0;
-    f_yellow = 0.0;
-    f_green = 0.0;
-  }
+  f_green = std::clamp(f_green, 0.0, max_single_rotor);
   
   // ========================================================================
   // APPLY FORCES TO MULTIBODY SYSTEM
