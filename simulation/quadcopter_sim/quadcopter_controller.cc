@@ -148,14 +148,7 @@ void QuadcopterController::CalcSpatialForces(
   // ========================================================================
   
   const double arm_length = 0.15;
-  
-  // Floor: never let total thrust go below 20% of hover when armed
-  // This ensures differential mixing always has a positive base to work with,
-  // preventing phantom thrust from clamping asymmetry
-  const double thrust_floor = hover_thrust_ * 0.05;
-  const double effective_thrust = std::max(total_thrust, thrust_floor);
-  
-  const double base_thrust_per_rotor = effective_thrust / 4.0;
+  const double base_thrust_per_rotor = total_thrust / 4.0;
   
   const double pitch_diff = pitch_torque / (4.0 * arm_length);
   const double roll_diff = roll_torque / (4.0 * arm_length);
@@ -171,6 +164,27 @@ void QuadcopterController::CalcSpatialForces(
   f_red    = std::clamp(f_red,    0.0, max_single_rotor);
   f_yellow = std::clamp(f_yellow, 0.0, max_single_rotor);
   f_green  = std::clamp(f_green,  0.0, max_single_rotor);
+  
+  // ========================================================================
+  // RESCALE: ensure total motor force = commanded total_thrust
+  // Clamping can create unintended net force (phantom thrust).
+  // Rescale all motors proportionally so the sum matches total_thrust.
+  // ========================================================================
+  const double actual_sum = f_blue + f_red + f_yellow + f_green;
+  
+  if (actual_sum > 1e-6 && total_thrust > 1e-6) {
+    const double scale = total_thrust / actual_sum;
+    f_blue   *= scale;
+    f_red    *= scale;
+    f_yellow *= scale;
+    f_green  *= scale;
+  } else if (total_thrust < 1e-6) {
+    // Zero commanded thrust = zero motor output, period.
+    f_blue = 0.0;
+    f_red = 0.0;
+    f_yellow = 0.0;
+    f_green = 0.0;
+  }
   
   // ========================================================================
   // APPLY FORCES TO MULTIBODY SYSTEM
