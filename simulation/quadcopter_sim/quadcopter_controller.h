@@ -1,49 +1,58 @@
 #pragma once
 
-#include <vector>
-#include <memory>
-
 #include "drake/systems/framework/leaf_system.h"
 #include "drake/multibody/plant/multibody_plant.h"
 #include "drake/multibody/tree/rigid_body.h"
-#include "drake/multibody/tree/spatial_inertia.h"
-#include "drake/multibody/plant/externally_applied_spatial_force.h"
-#include "drake/common/value.h"
 
 namespace drake {
 namespace systems {
 
+// ============================================================================
+// QuadcopterController - IMU-based Cascaded Attitude + Altitude Controller
+// ============================================================================
+// This controller implements cascaded PD control for quadcopters using
+// realistic sensor data (IMU) instead of direct plant access.
+//
+// CONTROL LOOPS:
+// 1. Altitude Loop: target_altitude → thrust (PD control)
+// 2. Attitude Loop: target_angles → torques (cascaded P + PD)
+// 3. Motor Mixing: thrust + torques → individual motor commands
+//
 class QuadcopterController : public LeafSystem<double> {
  public:
-  // Constructs controller given pointer to plant and the drone rigid body.
   QuadcopterController(const drake::multibody::MultibodyPlant<double>* plant,
                        const drake::multibody::RigidBody<double>* drone_body);
 
  private:
-  // Allocator for the output port
   std::unique_ptr<drake::AbstractValue> AllocateSpatialForces() const;
 
-  // Create the output spatial forces from the input control vector.
-  // Input port 0 is a vector of length 4:
-  //   [0]    total thrust (N) - distributed equally to all 4 rotors
-  //   [1]    desired roll angle (rad) - AUTO-LEVELS to 0 when input = 0
-  //   [2]    desired pitch angle (rad) - AUTO-LEVELS to 0 when input = 0
+  // ========================================================================
+  // INPUT PORTS
+  // ========================================================================
+  // 
+  // Input port 0: "control_input" (5 elements) ← CHANGED FROM 4!
+  //   [0]    target altitude (m) - for altitude hold PD controller
+  //   [1]    desired roll angle (rad)
+  //   [2]    desired pitch angle (rad)
   //   [3]    desired yaw angle (rad)
+  //   [4]    altitude_mode (0.0 = manual thrust, 1.0 = auto-hover)
   //
-  // Input port 1 is the plant state (auto-connected)
+  // Input port 1: "imu_state" (13 elements)
+  //   [0-3]  Quaternion orientation (w, x, y, z)
+  //   [4-6]  Angular velocity (body frame, rad/s)
+  //   [7-9]  Linear acceleration (body frame, m/s²)
+  //   [10-12] Position (world frame, m) - element [12] is altitude
   //
-  // This implements CASCADED ANGLE + RATE CONTROL for X-CONFIGURATION:
-  // - Outer loop: P controller on angle error → desired rate
-  // - Inner loop: PD controller on rate error → torque
-  // - Thrust mixing: ALL 4 MOTORS participate in pitch AND roll
+  // ========================================================================
+  // OUTPUT PORT
+  // ========================================================================
+  // 
+  // Output port 0: "spatial_forces" (AbstractValue)
+  //   - Vector of ExternallyAppliedSpatialForce<double>
+  //   - Contains 4 rotor thrust forces + 1 yaw moment
   //
-  // X-CONFIG MOTOR MIXING (quadcopter rotated 45°):
-  //   Forward: Blue+Red increase, Yellow+Green decrease
-  //   Backward: Blue+Red decrease, Yellow+Green increase  
-  //   Left: Blue+Yellow increase, Red+Green decrease
-  //   Right: Blue+Yellow decrease, Red+Green increase
-  //
-  // When input = 0: target angle = 0, drone auto-levels and stops
+  // ========================================================================
+  
   void CalcSpatialForces(
       const Context<double>& context,
       drake::AbstractValue* output) const;
@@ -52,30 +61,44 @@ class QuadcopterController : public LeafSystem<double> {
   const drake::multibody::RigidBody<double>* drone_body_{nullptr};
   
   // ========================================================================
-  // CASCADED CONTROLLER GAINS (tuned for STABLE yet RESPONSIVE flight)
+  // CONTROLLER GAINS (REALISTIC BETAFLIGHT VALUES)
   // ========================================================================
   
-  // OUTER LOOP: Angle → Rate (Proportional only)
-  // Balanced for quick response without instability at takeoff
-  const double kp_angle_roll_ = 5.0;     // Reduced from 15.0 for stability
-  const double kp_angle_pitch_ = 5.0;    // Reduced from 15.0 for stability
-  const double kp_angle_yaw_ = 1.50;      // Keep moderate for yaw
+  // ALTITUDE LOOP: Altitude → Thrust
+  const double kp_altitude_ = 3.0;       // Increased from 1.5
+  const double kd_altitude_ = 2.0;       // Increased from 1.0
   
-  // INNER LOOP: Rate → Torque (PD control)
-  // Balanced P and D for responsive yet stable control
-  const double kp_rate_roll_ = 1.80;     // Reduced from 0.25
-  const double kd_rate_roll_ = 0.8;     // Reduced from 0.015
+  // Filtering (keep these)
+  const double alpha_altitude_ = 0.9;
+  const double alpha_velocity_ = 0.9;
+  const double altitude_deadband_ = 0.1;
   
-  const double kp_rate_pitch_ = 1.80;    // Reduced from 0.25
-  const double kd_rate_pitch_ = 0.8;    // Reduced from 0.015
+  // OUTER LOOP: Angle → Rate (REALISTIC VALUES)
+  const double kp_angle_roll_ = 15.0;    // Was 3.0 - NOW 5x HIGHER
+  const double kp_angle_pitch_ = 15.0;   // Was 3.0
+  const double kp_angle_yaw_ = 3.0;      // Was 1.0
   
-  const double kp_rate_yaw_ = 5.0;      // Keep moderate
-  const double kd_rate_yaw_ = 1.5;     // Keep moderate
-
+  // INNER LOOP: Rate → Torque (REALISTIC VALUES)
+  const double kp_rate_roll_ = 8.0;      // Was 1.2 - NOW 7x HIGHER
+  const double kd_rate_roll_ = 5.0;      // Was 0.6
+  
+  const double kp_rate_pitch_ = 8.0;     // Was 1.2
+  const double kd_rate_pitch_ = 5.0;     // Was 0.6
+  
+  const double kp_rate_yaw_ = 5.0;       // Was 3.0
+  const double kd_rate_yaw_ = 2.0;       // Was 1.0
+  
   // Physical constants
   const double drone_mass_ = 0.5;
   const double gravity_ = 9.81;
   const double hover_thrust_ = drone_mass_ * gravity_;
+  
+  // Internal state for altitude control
+  mutable double last_altitude_ = 0.0;
+  mutable double last_time_ = -1.0;
+  mutable double filtered_altitude_ = 0.0;   // ← ADD: filtered altitude measurement
+  mutable double filtered_velocity_ = 0.0;
+  mutable bool altitude_initialized_ = false;
 };
 
 }  // namespace systems

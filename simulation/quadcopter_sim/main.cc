@@ -1,4 +1,4 @@
-// main.cc - Angle Stabilization Mode (Auto-Level)
+// main.cc - IMU-Based Angle Stabilization Mode
 #include <iostream>
 #include <memory>
 #include <algorithm>
@@ -33,13 +33,13 @@
 #include "quadcopter_controller.h"
 #include "quadcopter_model.h"
 #include "world.h"
-
-
+#include "imu_sensor.h"  // NEW: Add IMU sensor header
+#include "ekf_estimator.h"
 
 using namespace drake;
 
 int main() {
-  std::cout << "Starting quadcopter simulation - ANGLE STABILIZATION MODE..." << std::endl;
+  std::cout << "Starting quadcopter simulation - IMU-BASED STABILIZATION MODE..." << std::endl;
 
   systems::DiagramBuilder<double> builder;
   auto [plant, scene_graph] =
@@ -59,9 +59,6 @@ int main() {
   const auto& drone_body = AddQuadcopterModel(&plant, &scene_graph);
   AddGroundWithCollision(&plant, &scene_graph, /*ground_z=*/-0.01);
 
-
-
-
   plant.Finalize();
 
   // ========================================================================
@@ -75,17 +72,10 @@ int main() {
       plant.GetBodyFrameIdOrThrow(drone_body.index());
   
   // Camera position and orientation (in body frame)
-  // Position: 8cm forward (+X), centered in Y, 2cm up (+Z)
-  // Orientation: Tilted 30° DOWN to see ground better
-  const Eigen::Vector3d camera_position(0.03, -0.03, 0.06);   // 5cm up
-  
-  // Camera orientation:
-  // - Roll: 0° (keep upright)
-  // - Pitch: -20° (tilt down to see ground)
-  // - Yaw: 0° (face forward along +X axis)
-  const double camera_roll = 0.0 * M_PI / 180.0;  ;                      // Upright
-  const double camera_pitch = -135.0 * M_PI / 180.0;    // 20° down
-  const double camera_yaw = 135.0 * M_PI / 180.0;                      // Face forward (+X)
+  const Eigen::Vector3d camera_position(0.03, -0.03, 0.06);
+  const double camera_roll = 0.0 * M_PI / 180.0;
+  const double camera_pitch = -135.0 * M_PI / 180.0;
+  const double camera_yaw = 135.0 * M_PI / 180.0;
   
   const math::RigidTransformd X_BC(
       math::RollPitchYaw<double>(camera_roll, camera_pitch, camera_yaw),
@@ -95,18 +85,18 @@ int main() {
   // Camera settings
   const int width = 480;
   const int height = 640;
-  const double fov = 90.0 * M_PI / 180.0;  // Wide FOV
+  const double fov = 90.0 * M_PI / 180.0;
   
-  // Create depth camera (simple constructor)
+  // Create depth camera
   geometry::render::DepthRenderCamera depth_camera(
-      {"renderer", {width, height, fov}, {0.01, 100.0}, {}},  // near=5cm, far=50m
+      {"renderer", {width, height, fov}, {0.01, 100.0}, {}},
       {0.01, 100.0}
   );
   
-  // Create RgbdSensor (3-argument constructor)
+  // Create RgbdSensor
   auto* camera = builder.AddSystem<systems::sensors::RgbdSensor>(
       drone_frame_id,
-      X_BC,           // Camera offset from drone body
+      X_BC,
       depth_camera
   );
   camera->set_name("fpv_camera");
@@ -125,30 +115,67 @@ int main() {
   );
   
   std::cout << "FPV camera ready!" << std::endl;
-  //--- fpv camera code ends
 
-
-
-
-
+  // ========================================================================
+  // ADD IMU SENSOR (CRITICAL FOR HARDWARE TRANSITION!)
+  // ========================================================================
   
+  std::cout << "Setting up IMU sensor..." << std::endl;
+  
+  auto* imu = builder.AddSystem<systems::ImuSensor>(&plant, &drone_body, 200.0);
+  imu->set_name("imu_sensor");
+  
+  // Connect plant state to IMU
+  builder.Connect(plant.get_state_output_port(),
+                  imu->get_input_port(0));
+  
+  std::cout << "IMU sensor ready (200 Hz update rate)!" << std::endl;
 
+  // ========================================================================
+  // ADD EKF STATE ESTIMATOR (NEW!)
+  // ========================================================================
+  
+  std::cout << "Setting up EKF state estimator..." << std::endl;
+  
+  auto* ekf = builder.AddSystem<systems::EkfEstimator>(200.0);
+  ekf->set_name("ekf_estimator");
+  
+  // Connect IMU measurements to EKF
+  builder.Connect(imu->get_output_port(0),
+                  ekf->get_input_port(0));
+  
+  std::cout << "EKF estimator ready (200 Hz update rate)!" << std::endl;
+
+  // ========================================================================
+  // ADD CONTROLLER (NOW READS FROM IMU, NOT PLANT!)
+  // ========================================================================
+  
   auto controller = builder.AddSystem<systems::QuadcopterController>(
       &plant, &drone_body);
   controller->set_name("cascaded_angle_rate_controller");
 
-  // Export control input port (port 0)
+  // Export control input port (port 0) - unchanged
   builder.ExportInput(controller->get_input_port(0), "control_input");
   
-  // Connect plant state to controller (port 1)
-  builder.Connect(plant.get_state_output_port(),
+  // ========================================================================
+  // CRITICAL CHANGE: Controller reads from EKF, not raw IMU!
+  // ========================================================================
+  // OLD:
+  // builder.Connect(imu->get_output_port(0),
+  //                 controller->get_input_port(1));
+  
+  // NEW:
+  builder.Connect(ekf->get_output_port(0),
                   controller->get_input_port(1));
   
-  // Connect controller output to plant
+  // Connect controller output to plant - unchanged
   builder.Connect(controller->get_output_port(0),
                   plant.get_applied_spatial_force_input_port());
 
-  // Create MeshCat and connect visualizer
+  // ========================================================================
+  // ADD MESHCAT VISUALIZER
+  // ========================================================================
+  
   auto meshcat = std::make_shared<geometry::Meshcat>();
   auto meshcat_vis = &geometry::MeshcatVisualizer<double>::AddToBuilder(
       &builder, scene_graph, meshcat);
@@ -156,11 +183,16 @@ int main() {
   
   std::cout << "\nMeshCat URL: " << meshcat->web_url() << std::endl;
 
+  // ========================================================================
+  // BUILD DIAGRAM
+  // ========================================================================
+  
   auto diagram = builder.Build();
   systems::Simulator<double> simulator(*diagram);
   auto& root_context = simulator.get_mutable_context();
   auto& plant_context = plant.GetMyMutableContextFromRoot(&root_context);
 
+  // Set initial conditions
   math::RollPitchYaw<double> rpy(0.0, 0.0, 0.0);
   math::RigidTransformd initial_pose(
       rpy.ToRotationMatrix(),
@@ -172,15 +204,21 @@ int main() {
   diagram->ForcedPublish(root_context);
 
   const double body_mass = 0.5;
-  const double hover_thrust = body_mass * 9.81;  // Total thrust needed to hover
+  const double hover_thrust = body_mass * 9.81;
 
+  // ========================================================================
+  // PRINT STARTUP INFO
+  // ========================================================================
+  
   std::cout << "\n╔══════════════════════════════════════════════════╗" << std::endl;
-  std::cout << "║   QUADCOPTER X-CONFIG STABILIZATION MODE     ║" << std::endl;
+  std::cout << "║   QUADCOPTER IMU-BASED STABILIZATION MODE    ║" << std::endl;
   std::cout << "╚══════════════════════════════════════════════════╝" << std::endl;
   std::cout << "\nDrone specifications:" << std::endl;
   std::cout << " • Mass: " << body_mass << " kg" << std::endl;
   std::cout << " • Hover thrust: " << hover_thrust << " N" << std::endl;
   std::cout << " • Configuration: X-FRAME (45° rotated)" << std::endl;
+  std::cout << " • IMU Update Rate: 200 Hz" << std::endl;
+  std::cout << " • Controller: Reads from IMU (NOT plant state!)" << std::endl;
   
   std::cout << "\n     MOTOR LAYOUT (X-Configuration):" << std::endl;
   std::cout << "           Red (FL)" << std::endl;
@@ -215,10 +253,10 @@ int main() {
   std::cout << " • q                  : Quit" << std::endl;
   std::cout << "\n═══════════════════════════════════════════════════" << std::endl;
   std::cout << "\n FEATURES:" << std::endl;
-  std::cout << " • BALANCED stabilization - stable takeoff + responsive control" << std::endl;
+  std::cout << " • IMU-based state estimation (200 Hz)" << std::endl;
+  std::cout << " • Hardware-ready architecture" << std::endl;
   std::cout << " • AUTO-HOVER: Press 'h' to lock altitude" << std::endl;
   std::cout << " • Release keys → Auto-levels smoothly" << std::endl;
-  std::cout << " • YAW-COMPENSATED mixing prevents unwanted rotation" << std::endl;
   std::cout << "═══════════════════════════════════════════════════\n" << std::endl;
 
   std::cout << "MeshCat URL: " << meshcat->web_url() << std::endl;
@@ -228,48 +266,42 @@ int main() {
   drake::set_conio_terminal_mode();
   simulator.set_target_realtime_rate(1.0);
 
+  // ========================================================================
+  // SIMULATION LOOP VARIABLES
+  // ========================================================================
+  
   double sim_time = 0.0;
   const double dt = 0.005;
   const double end_time = 300.0;
 
-  // Control state
-  double thrust = 0.0;  // Start with ZERO thrust (drone on ground)
-  const double thrust_inc = 0.5;  // Thrust increment (N)
-  
-  // Auto-hover state
+  // User control state (NO MORE CONTROL LOGIC HERE!)
   bool auto_hover_enabled = true;
   double hover_target_altitude = 0.0;
-  const double kp_altitude = 8.0;    // Proportional gain for altitude hold
-  const double kd_altitude = 3.0;    // Derivative gain (damping)
-  double last_altitude = 0.0;
   
-  // Angle setpoints (rad) - drone will auto-level to these when keys released
-  // When no key pressed, these decay to zero → drone levels out
-  // BALANCED auto-decay for smooth stopping without instability
-  // const double decay_factor = 0.85;  // 15% decay per frame
   double target_roll = 0;
   double target_pitch = 0;
-  double target_yaw = 0.0;  // ADD THIS LINE - yaw should also decay!
+  double target_yaw = 0.0;
   
-  const double max_angle = 0.6;   // Maximum tilt ~23 degrees (higher for agility)
-  const double angle_inc = 0.1;  // Angle increment per key press (very responsive)
+  const double max_angle = 0.6;
+  const double angle_inc = 0.1;
   
   bool armed = false;
   bool running = true;
 
-  // Control input vector: 4 elements [thrust, roll_angle, pitch_angle, yaw_angle]
-  Eigen::Vector4d control_input;
+  // Control input vector: NOW 5 ELEMENTS! [altitude, roll, pitch, yaw, mode]
+  Eigen::VectorXd control_input(5);
   control_input.setZero();
   
-  // Track time for periodic status updates
   double last_print_time = 0.0;
 
+  // ========================================================================
+  // MAIN SIMULATION LOOP
+  // ========================================================================
+  
   while (running && sim_time < end_time) {
     int key = drake::get_key();
 
-    // ========================================================================
-    // ARM / DISARM
-    // ========================================================================
+    // ARM / DISARM (unchanged)
     if (key == 'a' || key == 'A') {
       armed = !armed;
       if (armed) {
@@ -282,133 +314,88 @@ int main() {
       std::this_thread::sleep_for(std::chrono::milliseconds(150));
     }
 
-    // ========================================================================
-    // QUIT
-    // ========================================================================
+    // QUIT (unchanged)
     if (key == 'q' || key == 'Q') {
       std::cout << "\nQuit requested." << std::endl;
       break;
     }
 
     // ========================================================================
-    // THRUST CONTROL (Arrow keys) + AUTO-HOVER
+    // ALTITUDE TARGET CONTROL (Arrow keys)
     // ========================================================================
     if (key == drake::KEY_ARROW_UP) {
-      if (auto_hover_enabled) {
-        // In auto-hover mode, adjust target altitude
-        hover_target_altitude += 0.1;  // 10cm increment
-        std::cout << "Target altitude: " << hover_target_altitude << " m" << std::endl;
-      } else {
-        // Manual thrust mode
-        thrust += thrust_inc;
-        thrust = std::min(thrust, hover_thrust * 2.5);
-        std::cout << "Thrust: " << thrust << " N" << std::endl;
-      }
+      hover_target_altitude += 0.1;
+      std::cout << "Target altitude: " << hover_target_altitude << " m" << std::endl;
     } else if (key == drake::KEY_ARROW_DOWN) {
-      if (auto_hover_enabled) {
-        hover_target_altitude -= 0.1;
-        hover_target_altitude = std::max(hover_target_altitude, 0.0);
-        std::cout << "Target altitude: " << hover_target_altitude << " m" << std::endl;
-      } else {
-        thrust -= thrust_inc;
-        thrust = std::max(thrust, 0.0);
-        std::cout << "Thrust: " << thrust << " N" << std::endl;
-      }
+      hover_target_altitude -= 0.1;
+      hover_target_altitude = std::max(hover_target_altitude, 0.0);
+      std::cout << "Target altitude: " << hover_target_altitude << " m" << std::endl;
     }
     
-    // Auto-hover toggle
+    // ========================================================================
+    // AUTO-HOVER TOGGLE
+    // ========================================================================
     if (key == 'h' || key == 'H') {
       auto_hover_enabled = true;
-      // Get current altitude from plant
-      auto& current_plant_context = plant.GetMyMutableContextFromRoot(&root_context);
-      const math::RigidTransformd current_pose = 
-          plant.GetFreeBodyPose(current_plant_context, drone_body);
-      hover_target_altitude = current_pose.translation()(2);  // Current Z position
+      // Read current altitude from EKF output (NOT plant!)
+      auto& ekf_context = diagram->GetSubsystemContext(*ekf, root_context);
+      const auto& ekf_output = ekf->get_output_port(0).Eval(ekf_context);
+      hover_target_altitude = ekf_output(12);  // Position Z from EKF
       std::cout << "\n*** AUTO-HOVER ENABLED at " << hover_target_altitude << "m ***" << std::endl;
       std::this_thread::sleep_for(std::chrono::milliseconds(150));
     }
     
-    // Disable auto-hover
     if (key == ' ') {
       if (auto_hover_enabled) {
         auto_hover_enabled = false;
-        std::cout << "\n*** AUTO-HOVER DISABLED - Manual thrust control ***" << std::endl;
+        std::cout << "\n*** AUTO-HOVER DISABLED ***" << std::endl;
         std::this_thread::sleep_for(std::chrono::milliseconds(150));
       }
     }
 
     // ========================================================================
-    // ANGLE CONTROL (i/k/j/l/u/o keys) - DIRECT STICK MAPPING (Angle Mode)
+    // ANGLE CONTROL - DIRECT STICK MAPPING
     // ========================================================================
     
-    // Stick deflection: 1.0, -1.0, or 0.0 (like a real RC transmitter)
     double pitch_stick = 0.0;
     double roll_stick = 0.0;
     
     if (key == 'i' || key == 'I') {
-      pitch_stick = 1.0;    // Forward
+      pitch_stick = 1.0;
     } else if (key == 'k' || key == 'K') {
-      pitch_stick = -1.0;   // Backward
+      pitch_stick = -1.0;
     }
 
     if (key == 'j' || key == 'J') {
-      roll_stick = -1.0;    // Left
+      roll_stick = -1.0;
     } else if (key == 'l' || key == 'L') {
-      roll_stick = 1.0;     // Right
+      roll_stick = 1.0;
     }
 
-    // Direct mapping: stick position = target angle (no accumulation, no decay)
     target_pitch = pitch_stick * max_angle;
     target_roll = roll_stick * max_angle;
 
-    // YAW CONTROL (yaw is intentionally accumulative — it's a heading reference)
+    // YAW CONTROL
     if (key == 'u' || key == 'U') {
       target_yaw += angle_inc;
     } else if (key == 'o' || key == 'O') {
       target_yaw -= angle_inc;
     }
     
-    // Normalize yaw to [-π, π]
-    //while (target_yaw > M_PI) target_yaw -= 2.0 * M_PI;
-    //while (target_yaw < -M_PI) target_yaw += 2.0 * M_PI;
-    
-    // Zero out very small angles (dead zone for cleaner behavior)
     if (std::abs(target_roll) < 0.005) target_roll = 0.0;
     if (std::abs(target_pitch) < 0.005) target_pitch = 0.0;
 
     // ========================================================================
-    // BUILD CONTROL INPUT + AUTO-HOVER ALTITUDE CONTROL
+    // BUILD CONTROL INPUT (5 ELEMENTS) - JUST COMMANDS
     // ========================================================================
     if (!armed) {
       control_input.setZero();
     } else {
-      // Auto-hover: PD control on altitude
-      if (auto_hover_enabled) {
-        auto& current_plant_context = plant.GetMyMutableContextFromRoot(&root_context);
-        const math::RigidTransformd current_pose = 
-            plant.GetFreeBodyPose(current_plant_context, drone_body);
-        const double current_altitude = current_pose.translation()(2);
-        
-        // Altitude error
-        const double altitude_error = hover_target_altitude - current_altitude;
-        
-        // Estimate vertical velocity (simple finite difference)
-        const double vertical_velocity = (current_altitude - last_altitude) / dt;
-        last_altitude = current_altitude;
-        
-        // PD controller for altitude
-        const double altitude_correction = kp_altitude * altitude_error 
-                                         - kd_altitude * vertical_velocity;
-        
-        // Apply correction on top of hover thrust
-        thrust = hover_thrust + altitude_correction;
-        thrust = std::clamp(thrust, 0.0, hover_thrust * 2.5);
-      }
-      
-      control_input(0) = thrust;
-      control_input(1) = target_roll;
-      control_input(2) = target_pitch;
-      control_input(3) = target_yaw;
+      control_input(0) = hover_target_altitude;           // Target altitude
+      control_input(1) = target_roll;                      // Target roll
+      control_input(2) = target_pitch;                     // Target pitch
+      control_input(3) = target_yaw;                       // Target yaw
+      control_input(4) = auto_hover_enabled ? 1.0 : 0.0;  // Altitude mode
     }
 
     // Send to controller
@@ -424,17 +411,27 @@ int main() {
       simulator.AdvanceTo(sim_time + dt);
       sim_time += dt;
       
-      // Print status every 2 second
-      if (sim_time - last_print_time >= 2.0) {
-        auto& current_plant_context = plant.GetMyMutableContextFromRoot(&root_context);
-        const math::RigidTransformd current_pose = 
-            plant.GetFreeBodyPose(current_plant_context, drone_body);
-        const Eigen::Vector3d pos = current_pose.translation();
-        const math::RollPitchYaw<double> current_rpy(current_pose.rotation());
+      // Print status every 1 second
+      // Print status every 1 second
+      if (sim_time - last_print_time >= 1.0) {
+        // Read from EKF output (not IMU!) for status display
+        auto& ekf_context = diagram->GetSubsystemContext(*ekf, root_context);
+        const auto& ekf_output = ekf->get_output_port(0).Eval(ekf_context);
         
-        std::cout << "Thrust=" << std::setprecision(1) << thrust << "N";
+        // Parse EKF output: [quat(4), angular_vel(3), accel(3), pos(3)]
+        Eigen::Quaterniond quat(ekf_output(0), ekf_output(1), 
+                                ekf_output(2), ekf_output(3));
+        const math::RotationMatrix<double> R_WB(quat);
+        const math::RollPitchYaw<double> current_rpy(R_WB);
+        const double current_altitude = ekf_output(12);  // Position Z
         
-        std::cout << " | Alt=" << std::setprecision(2) << pos(2) << "m"
+        std::cout << "t=" << std::fixed << std::setprecision(1) << sim_time;
+        
+        if (auto_hover_enabled) {
+          std::cout << " [HOVER@" << std::setprecision(2) << hover_target_altitude << "m]";
+        }
+        
+        std::cout << " | Alt=" << std::setprecision(2) << current_altitude << "m"
                   << " | Angle=[" << std::setprecision(1)
                   << current_rpy.roll_angle()*57.3 << "°, " 
                   << current_rpy.pitch_angle()*57.3 << "°]" << std::endl;
@@ -449,11 +446,11 @@ int main() {
 
   std::cout << "\nSimulation stopped." << std::endl;
   
-  // Restore terminal to canonical mode so cin.get() works
+  // Restore terminal
   struct termios term;
   tcgetattr(STDIN_FILENO, &term);
-  term.c_lflag |= ICANON;  // Enable canonical mode
-  term.c_lflag |= ECHO;    // Enable echo
+  term.c_lflag |= ICANON;
+  term.c_lflag |= ECHO;
   tcsetattr(STDIN_FILENO, TCSANOW, &term);
   
   std::cout << "Press Enter to exit..." << std::endl;

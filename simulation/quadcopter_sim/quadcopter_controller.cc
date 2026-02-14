@@ -17,14 +17,15 @@ QuadcopterController::QuadcopterController(
     const drake::multibody::MultibodyPlant<double>* plant,
     const drake::multibody::RigidBody<double>* drone_body)
     : plant_(plant), drone_body_(drone_body) {
-  // Input port 0: 4-element control vector (thrust + angle setpoints)
-  this->DeclareVectorInputPort("control_input", 4);
   
-  // Input port 1: plant state (for reading drone orientation and rates)
-  this->DeclareVectorInputPort("plant_state", 
-                               plant->num_positions() + plant->num_velocities());
+  // Input port 0: 5-element control vector ← CHANGED FROM 4!
+  // [target_altitude, roll, pitch, yaw, altitude_mode]
+  this->DeclareVectorInputPort("control_input", 5);
   
-  // Output: abstract vector of spatial forces applied externally.
+  // Input port 1: 13-element IMU state vector
+  this->DeclareVectorInputPort("imu_state", 13);
+  
+  // Output: spatial forces
   this->DeclareAbstractOutputPort(
       "spatial_forces",
       [this]() { return this->AllocateSpatialForces(); },
@@ -47,52 +48,134 @@ void QuadcopterController::CalcSpatialForces(
   // READ INPUTS
   // ========================================================================
   
-  // Control inputs from user (port 0)
+  // Control inputs from user (port 0) - NOW 5 ELEMENTS!
   const auto& u = this->get_input_port(0).Eval(context);
-  const double total_thrust = u(0);         // Total thrust (N)
+  const double target_altitude = u(0);      // Target altitude (m)
   const double target_roll = u(1);          // Target roll angle (rad)
   const double target_pitch = u(2);         // Target pitch angle (rad)
   const double target_yaw = u(3);           // Target yaw angle (rad)
+  const double altitude_mode = u(4);        // 0.0 = manual, 1.0 = auto-hover
 
-  // Plant state (port 1)
-  const auto& x = this->get_input_port(1).Eval(context);
-  const int nq = plant_->num_positions();
-  const int nv = plant_->num_velocities();
+  // ========================================================================
+  // IMU SENSOR DATA (port 1) - 13 ELEMENTS
+  // ========================================================================
+  const auto& imu = this->get_input_port(1).Eval(context);
   
-  Eigen::VectorXd q = x.head(nq);
-  Eigen::VectorXd v = x.tail(nv);
+  // [0-3] Quaternion orientation
+  Eigen::Quaterniond quat(imu(0), imu(1), imu(2), imu(3));
+  quat.normalize();
   
-  // Extract quaternion and create rotation matrix
-  Eigen::Quaterniond quat(q(0), q(1), q(2), q(3));
-  
-  // Safety check: ensure quaternion is valid
+  // Safety check
   const double quat_norm = quat.norm();
   if (quat_norm < 0.1) {
-    // Invalid quaternion - drone has flipped catastrophically
-    // Set all forces to zero to prevent further damage
     auto& output = 
         output_abstract->get_mutable_value<std::vector<drake::multibody::ExternallyAppliedSpatialForce<double>>>();
     output.clear();
     return;
   }
   
-  quat.normalize();
-  const math::RotationMatrix<double> R_WB(quat);
+  // [4-6] Angular velocity (gyroscope, body frame, rad/s)
+  const double current_roll_rate = imu(4);
+  const double current_pitch_rate = imu(5);
+  const double current_yaw_rate = imu(6);
   
-  // Extract current orientation as Euler angles
+  // [7-9] Linear acceleration (accelerometer, body frame, m/s²)
+  const Eigen::Vector3d accel_body = imu.segment(7, 3);
+  
+  // [10-12] Position (world frame, m)
+  const double current_altitude = imu(12);  // Z coordinate = altitude
+  
+  // ========================================================================
+  // EXTRACT ORIENTATION FROM QUATERNION
+  // ========================================================================
+  const math::RotationMatrix<double> R_WB(quat);
   const math::RollPitchYaw<double> rpy(R_WB);
   const double current_roll = rpy.roll_angle();
   const double current_pitch = rpy.pitch_angle();
   const double current_yaw = rpy.yaw_angle();
   
-  // Extract current angular rates (body frame)
-  const Eigen::Vector3d omega = v.head(3);
-  const double current_roll_rate = omega(0);
-  const double current_pitch_rate = omega(1);
-  const double current_yaw_rate = omega(2);
+  // Safety check: verify orientation is reasonable
+  if (std::abs(current_roll) > M_PI / 2.5 || std::abs(current_pitch) > M_PI / 2.5) {
+    auto& output = 
+        output_abstract->get_mutable_value<std::vector<drake::multibody::ExternallyAppliedSpatialForce<double>>>();
+    output.clear();
+    return;
+  }
+  
+   // ========================================================================
+  // ALTITUDE CONTROL LOOP (SIMPLE FIX)
+  // ========================================================================
+  
+  double total_thrust = 0.0;
+  
+  if (altitude_mode > 0.5) {  // Auto-hover enabled
+    const double current_time = context.get_time();
+    
+    if (!altitude_initialized_) {
+      filtered_altitude_ = current_altitude;
+      last_altitude_ = current_altitude;
+      last_time_ = current_time;
+      filtered_velocity_ = 0.0;
+      altitude_initialized_ = true;
+      
+      // SIMPLE FIX: Set initial thrust based on target altitude
+      if (target_altitude < 0.15) {
+        total_thrust = 0.0;  // Target is ground → zero thrust
+      } else {
+        total_thrust = hover_thrust_;  // Target is in air → hover thrust
+      }
+      
+    } else {
+      // Low-pass filter altitude
+      filtered_altitude_ = alpha_altitude_ * filtered_altitude_ 
+                         + (1.0 - alpha_altitude_) * current_altitude;
+      
+      const double dt = current_time - last_time_;
+      
+      // Compute error with deadband
+      double altitude_error = target_altitude - filtered_altitude_;
+      if (std::abs(altitude_error) < altitude_deadband_) {
+        altitude_error = 0.0;
+      }
+      
+      // Estimate velocity
+      double vertical_velocity = 0.0;
+      if (dt > 1e-6) {
+        const double raw_velocity = (filtered_altitude_ - last_altitude_) / dt;
+        filtered_velocity_ = alpha_velocity_ * filtered_velocity_ 
+                           + (1.0 - alpha_velocity_) * raw_velocity;
+        vertical_velocity = filtered_velocity_;
+      }
+      
+      last_altitude_ = filtered_altitude_;
+      last_time_ = current_time;
+      
+      // CRITICAL: Choose base thrust based on WHERE we're trying to be
+      double base_thrust;
+      if (target_altitude < 0.15) {
+        // Trying to land/stay on ground
+        base_thrust = 0.0;
+      } else {
+        // Flying in air
+        base_thrust = hover_thrust_;
+      }
+      
+      // PD correction
+      const double altitude_correction = kp_altitude_ * altitude_error 
+                                       - kd_altitude_ * vertical_velocity;
+      
+      total_thrust = base_thrust + altitude_correction;
+      
+      // Clamp (allow zero for landing!)
+      total_thrust = std::clamp(total_thrust, 0.0, hover_thrust_ * 1.5);
+    }
+  } else {
+    altitude_initialized_ = false;
+    total_thrust = 0.0;
+  }
   
   // ========================================================================
-  // CASCADED CONTROL: OUTER LOOP (Angle → Desired Rate)
+  // CASCADED ATTITUDE CONTROL: OUTER LOOP (Angle → Desired Rate)
   // ========================================================================
   
   // Compute angle errors
@@ -110,7 +193,7 @@ void QuadcopterController::CalcSpatialForces(
   const double desired_yaw_rate = kp_angle_yaw_ * yaw_error;
   
   // ========================================================================
-  // CASCADED CONTROL: INNER LOOP (Rate → Torque)
+  // CASCADED ATTITUDE CONTROL: INNER LOOP (Rate → Torque)
   // ========================================================================
   
   // Compute rate errors
@@ -129,19 +212,6 @@ void QuadcopterController::CalcSpatialForces(
   // ========================================================================
   // DIFFERENTIAL THRUST MIXING - REAL DRONE STYLE
   // ========================================================================
-  // Motor layout (X-configuration, viewed from above):
-  //        Front
-  //     Red   Blue
-  //       \ X /
-  //       / X \
-  //   Yellow  Green
-  //       Back
-  //
-  // Movement pairs:
-  //   FORWARD:  Blue↑ Red↑, Yellow↓ Green↓  (pitch forward)
-  //   BACKWARD: Blue↓ Red↓, Yellow↑ Green↑  (pitch back)
-  //   LEFT:     Blue↑ Yellow↑, Red↓ Green↓  (roll left)
-  //   RIGHT:    Blue↓ Yellow↓, Red↑ Green↑  (roll right)
   
   const double arm_length = 0.15;  // meters
   
@@ -149,41 +219,17 @@ void QuadcopterController::CalcSpatialForces(
   const double base_thrust_per_rotor = total_thrust / 4.0;
   
   // Convert torques to differential thrust amounts
-  // Positive pitch_torque = pitch forward = front motors decrease, back motors increase
-  // Positive roll_torque = roll right = right motors decrease, left motors increase
+  const double pitch_diff = pitch_torque / (2.0 * arm_length);
+  const double roll_diff = roll_torque / (2.0 * arm_length);
   
-  const double pitch_diff = pitch_torque / (4.0 * arm_length);  // Split across 2 motor pairs
-  const double roll_diff = roll_torque / (4.0 * arm_length);    // Split across 2 motor pairs
-  // const double yaw_diff = yaw_torque / 4.0;
-  
-  // REAL DRONE DIFFERENTIAL THRUST MIXING:
-  // 
-  // Blue (Front-Right):
-  //   - Part of FRONT pair (for pitch): pitch forward → decrease
-  //   - Part of RIGHT pair (for roll): roll right → decrease
-  //   - CW propeller: yaw right → decrease
+  // REAL DRONE DIFFERENTIAL THRUST MIXING (X-configuration):
   double f_blue = base_thrust_per_rotor - pitch_diff - roll_diff;
+  double f_red = base_thrust_per_rotor - pitch_diff + roll_diff;
+  double f_yellow = base_thrust_per_rotor + pitch_diff - roll_diff;
+  double f_green = base_thrust_per_rotor + pitch_diff + roll_diff;
   
-  // Red (Front-Left):
-  //   - Part of FRONT pair (for pitch): pitch forward → decrease
-  //   - Part of LEFT pair (for roll): roll right → increase
-  //   - CCW propeller: yaw right → increase
-  double f_red = base_thrust_per_rotor - pitch_diff + roll_diff ;
-  
-  // Yellow (Back-Right):
-  //   - Part of BACK pair (for pitch): pitch forward → increase
-  //   - Part of RIGHT pair (for roll): roll right → decrease
-  //   - CCW propeller: yaw right → increase
-  double f_yellow = base_thrust_per_rotor + pitch_diff - roll_diff ;
-  
-  // Green (Back-Left):
-  //   - Part of BACK pair (for pitch): pitch forward → increase
-  //   - Part of LEFT pair (for roll): roll right → increase
-  //   - CW propeller: yaw right → decrease
-  double f_green = base_thrust_per_rotor + pitch_diff + roll_diff ;
-  
-  // Clamp to physical limits (assumed: 1000 KV motor generating an almost 12.753 N of thrust)
-  const double max_single_rotor = 12.7;
+  // Clamp to physical limits
+  const double max_single_rotor = total_thrust * 0.9;
   f_blue = std::clamp(f_blue, 0.0, max_single_rotor);
   f_red = std::clamp(f_red, 0.0, max_single_rotor);
   f_yellow = std::clamp(f_yellow, 0.0, max_single_rotor);
@@ -193,9 +239,6 @@ void QuadcopterController::CalcSpatialForces(
   // APPLY FORCES TO MULTIBODY SYSTEM
   // ========================================================================
   
-  // X-CONFIGURATION rotor positions (45° diagonals)
-  //const double arm_diag = arm_length * 0.7071;  // arm_length / sqrt(2)
-
   const std::vector<Eigen::Vector3d> rotor_positions = {
       {arm_length, -arm_length, 0.0},    // Blue - Front-Right diagonal
       {arm_length, arm_length, 0.0},     // Red - Front-Left diagonal
@@ -215,7 +258,6 @@ void QuadcopterController::CalcSpatialForces(
     sf.body_index = drone_body_->index();
     sf.p_BoBq_B = p_B;
     
-    // Force in body +Z, rotated to world frame
     Eigen::Vector3d F_B(0.0, 0.0, fz);
     Eigen::Vector3d F_W = R_WB * F_B;
     
@@ -225,24 +267,21 @@ void QuadcopterController::CalcSpatialForces(
     output.push_back(sf);
   };
   
-  push_rotor(rotor_positions[0], f_blue);    // Front-Right
-  push_rotor(rotor_positions[1], f_red);     // Front-Left
-  push_rotor(rotor_positions[2], f_yellow);  // Back-Right
-  push_rotor(rotor_positions[3], f_green);   // Back-Left
+  push_rotor(rotor_positions[0], f_blue);
+  push_rotor(rotor_positions[1], f_red);
+  push_rotor(rotor_positions[2], f_yellow);
+  push_rotor(rotor_positions[3], f_green);
   
-  // Clamp yaw torque to safe limits
-  const double max_yaw_torque = 0.5;  // Experiment with this value
+  // Apply yaw torque as pure moment
+  const double max_yaw_torque = 0.5;
   const double yaw_torque_clamped = std::clamp(yaw_torque, -max_yaw_torque, max_yaw_torque);
 
-  // Apply yaw torque as pure moment (this is the ONLY way to create yaw)
-  if (std::abs(yaw_torque) > 1e-12) {
-    const double yaw_torque_safe = yaw_torque_clamped;
-    
+  if (std::abs(yaw_torque_clamped) > 1e-12) {
     drake::multibody::ExternallyAppliedSpatialForce<double> yaw_moment;
     yaw_moment.body_index = drone_body_->index();
     yaw_moment.p_BoBq_B = Eigen::Vector3d::Zero();
     
-    Eigen::Vector3d M_B(0.0, 0.0, yaw_torque_safe);
+    Eigen::Vector3d M_B(0.0, 0.0, yaw_torque_clamped);
     Eigen::Vector3d M_W = R_WB * M_B;
 
     yaw_moment.F_Bq_W = drake::multibody::SpatialForce<double>(
