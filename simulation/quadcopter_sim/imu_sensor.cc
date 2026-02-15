@@ -44,39 +44,23 @@ void ImuSensor::UpdateImuState(const Context<double>& context,
   Eigen::VectorXd v = x.tail(nv);
   
   // ========================================================================
-  // EXTRACT STATE DIRECTLY FROM VECTORS (NO PLANT CONTEXT NEEDED!)
+  // EXTRACT STATE DIRECTLY FROM VECTORS - PERFECT (NO NOISE!)
   // ========================================================================
   
   // 1. ORIENTATION (Quaternion) - directly from q
   Eigen::Quaterniond quat(q(0), q(1), q(2), q(3));
   quat.normalize();
   
-  // Add small orientation noise (simulate gyro drift integration)
-  static std::default_random_engine gen(std::random_device{}());
-  std::normal_distribution<double> quat_noise(0.0, 0.001);
-  
-  Eigen::Quaterniond quat_noisy(
-      quat.w() + quat_noise(gen),
-      quat.x() + quat_noise(gen),
-      quat.y() + quat_noise(gen),
-      quat.z() + quat_noise(gen)
-  );
-  quat_noisy.normalize();
+  // REMOVED: Orientation noise (perfect quaternion!)
   
   // 2. ANGULAR VELOCITY (Gyroscope) - directly from v
   // For a floating body, v = [angular_velocity(3), linear_velocity(3)]
   const Eigen::Vector3d omega_B = v.head(3);  // First 3 elements
   
-  // Add gyro noise + bias
-  std::normal_distribution<double> gyro_noise(0.0, gyro_noise_stddev_);
-  Eigen::Vector3d gyro_measured = omega_B +
-      Eigen::Vector3d(gyro_noise(gen), gyro_noise(gen), gyro_noise(gen)) +
-      Eigen::Vector3d(gyro_bias_, gyro_bias_, gyro_bias_);
+  // PERFECT gyro measurement (no noise, no bias)
+  Eigen::Vector3d gyro_measured = omega_B;
   
   // 3. LINEAR ACCELERATION (Accelerometer)
-  // We need to compute acceleration from velocity derivative
-  // For simplicity in simulation, we'll approximate or use gravity + small noise
-  
   // Get rotation matrix from quaternion
   const math::RotationMatrixd R_WB(quat);
   
@@ -86,28 +70,23 @@ void ImuSensor::UpdateImuState(const Context<double>& context,
   // Transform gravity to body frame (this is what accelerometer measures at rest)
   Eigen::Vector3d accel_B = R_WB.inverse() * gravity_W;
   
-  // Add noise + bias
-  std::normal_distribution<double> accel_noise(0.0, accel_noise_stddev_);
-  Eigen::Vector3d accel_measured = accel_B + 
-      Eigen::Vector3d(accel_noise(gen), accel_noise(gen), accel_noise(gen)) +
-      Eigen::Vector3d(accel_bias_, accel_bias_, accel_bias_);
+  // PERFECT accelerometer measurement (no noise, no bias)
+  Eigen::Vector3d accel_measured = accel_B;
   
   // 4. POSITION (from quaternion state)
   // For floating body: q = [quat(4), position(3)]
   Eigen::Vector3d position_W = q.tail(3);  // Last 3 elements of q
   
-  // Add barometer noise to altitude (Z)
-  std::normal_distribution<double> baro_noise(0.0, baro_noise_stddev_);
-  Eigen::Vector3d position_measured = position_W;
-  position_measured(2) += baro_noise(gen);  // Only Z has baro noise
+  // PERFECT barometer measurement (no noise)
+  double altitude_measured = position_W(2);
   
   // ========================================================================
-  // PACK INTO 13-ELEMENT OUTPUT VECTOR
+  // PACK INTO 7-ELEMENT OUTPUT VECTOR (PERFECT MEASUREMENTS!)
   // ========================================================================
   Eigen::VectorXd imu_data(7);
-  imu_data << accel_measured,
-              gyro_measured,                                                    // [7-9]
-              position_measured(2);                                                 // [10-12]
+  imu_data << accel_measured,        // [0-2] perfect accelerometer
+              gyro_measured,         // [3-5] perfect gyroscope
+              altitude_measured;     // [6] perfect barometer
   
   discrete_state->get_mutable_vector(0).SetFromVector(imu_data);
 }

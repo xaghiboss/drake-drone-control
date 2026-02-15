@@ -20,7 +20,29 @@ EkfEstimator::EkfEstimator(double update_rate)
   
   // Discrete state: [state(13), covariance(13x13 flattened), initialized_flag(1)]
   const int discrete_size = STATE_DIM + STATE_DIM * STATE_DIM + 1;
-  this->DeclareDiscreteState(discrete_size);
+  
+  // CRITICAL FIX: Initialize the discrete state with valid values!
+  Eigen::VectorXd initial_state = Eigen::VectorXd::Zero(discrete_size);
+  
+  // Set initial quaternion to identity (NOT zero!)
+  initial_state(0) = 1.0;  // qw = 1.0 (identity quaternion)
+  initial_state(1) = 0.0;  // qx = 0.0
+  initial_state(2) = 0.0;  // qy = 0.0
+  initial_state(3) = 0.0;  // qz = 0.0
+  
+  // Position, velocity, bias: already zero (OK)
+  
+  // Initialize covariance to P0
+  Eigen::Map<Eigen::VectorXd> P_vec(initial_state.data() + STATE_DIM, STATE_DIM * STATE_DIM);
+  Eigen::Map<Eigen::MatrixXd> P_init(P_vec.data(), STATE_DIM, STATE_DIM);
+  // Will be set properly in first update, for now just identity
+  P_init.setIdentity();
+  
+  // Set initialized_flag to 0.0 (will be set to 1.0 after first update)
+  initial_state(STATE_DIM + STATE_DIM * STATE_DIM) = 0.0;
+  
+  // Declare discrete state with initial value
+  this->DeclareDiscreteState(initial_state);
   
   // Periodic update at EKF rate
   this->DeclarePeriodicDiscreteUpdateEvent(
@@ -28,63 +50,51 @@ EkfEstimator::EkfEstimator(double update_rate)
       &EkfEstimator::UpdateEstimate);
   
   // ========================================================================
-  // INITIALIZE NOISE COVARIANCES
+  // PROCESS NOISE Q (Model uncertainty - keep some)
   // ========================================================================
-  
   Q_ = Eigen::MatrixXd::Zero(STATE_DIM, STATE_DIM);
   
-  // Quaternion process noise (gyro integration drift)
-  Q_(0, 0) = 1e-6;
-  Q_(1, 1) = 1e-6;
-  Q_(2, 2) = 1e-6;
-  Q_(3, 3) = 1e-6;
+  // Quaternion process noise (gyro integration errors)
+  Q_(0, 0) = 1e-8;  // Very small (nearly perfect)
+  Q_(1, 1) = 1e-8;
+  Q_(2, 2) = 1e-8;
+  Q_(3, 3) = 1e-8;
   
   // Position process noise
-  Q_(4, 4) = 1e-4;  // x
-  Q_(5, 5) = 1e-4;  // y
-  Q_(6, 6) = 1e-4;  // z
+  Q_(4, 4) = 1e-6;
+  Q_(5, 5) = 1e-6;
+  Q_(6, 6) = 1e-6;
   
   // Velocity process noise
-  Q_(7, 7) = 0.01;  // vx
-  Q_(8, 8) = 0.01;  // vy
-  Q_(9, 9) = 0.01;  // vz
+  Q_(7, 7) = 1e-4;
+  Q_(8, 8) = 1e-4;
+  Q_(9, 9) = 1e-4;
   
-  // Gyro bias process noise
-  Q_(10, 10) = 1e-8;
-  Q_(11, 11) = 1e-8;
-  Q_(12, 12) = 1e-8;
+  // Gyro bias process noise (should be zero with perfect sensors)
+  Q_(10, 10) = 1e-12;  // Nearly zero (no real bias)
+  Q_(11, 11) = 1e-12;
+  Q_(12, 12) = 1e-12;
   
-  // Measurement noise R
+  // ========================================================================
+  // MEASUREMENT NOISE R (ZERO for perfect sensors!)
+  // ========================================================================
   R_ = Eigen::MatrixXd::Zero(MEAS_DIM, MEAS_DIM);
   
-  // Accelerometer noise
-  R_(0, 0) = 0.02 * 0.02;
-  R_(1, 1) = 0.02 * 0.02;
-  R_(2, 2) = 0.02 * 0.02;
+  // Accelerometer noise: PERFECT (near-zero)
+  R_(0, 0) = 1e-12;  // Was 0.02*0.02
+  R_(1, 1) = 1e-12;
+  R_(2, 2) = 1e-12;
   
-  // Gyroscope noise
-  R_(3, 3) = 0.01 * 0.01;
-  R_(4, 4) = 0.01 * 0.01;
-  R_(5, 5) = 0.01 * 0.01;
+  // Gyroscope noise: PERFECT (near-zero)
+  R_(3, 3) = 1e-12;  // Was 0.01*0.01
+  R_(4, 4) = 1e-12;
+  R_(5, 5) = 1e-12;
   
-  // Barometer noise
-  R_(6, 6) = 0.05 * 0.05;
+  // Barometer noise: PERFECT (near-zero)
+  R_(6, 6) = 1e-12;  // Was 0.05*0.05
   
   // Initial state covariance
-  P0_ = Eigen::MatrixXd::Identity(STATE_DIM, STATE_DIM);
-  P0_(0, 0) = 0.1;
-  P0_(1, 1) = 0.1;
-  P0_(2, 2) = 0.1;
-  P0_(3, 3) = 0.1;
-  P0_(4, 4) = 1.0;
-  P0_(5, 5) = 1.0;
-  P0_(6, 6) = 1.0;
-  P0_(7, 7) = 1.0;
-  P0_(8, 8) = 1.0;
-  P0_(9, 9) = 1.0;
-  P0_(10, 10) = 0.001;
-  P0_(11, 11) = 0.001;
-  P0_(12, 12) = 0.001;
+  P0_ = Eigen::MatrixXd::Identity(STATE_DIM, STATE_DIM) * 0.01;
 }
 
 void EkfEstimator::UpdateEstimate(const Context<double>& context,
@@ -321,6 +331,14 @@ void EkfEstimator::CalcControllerOutput(const Context<double>& context,
   
   // Extract components
   Eigen::Quaterniond q(x(0), x(1), x(2), x(3));
+  
+  // SAFETY CHECK: If quaternion is zero (not initialized yet), use identity
+  if (q.norm() < 0.1) {
+    q = Eigen::Quaterniond::Identity();  // Default to upright orientation
+  } else {
+    q.normalize();
+  }
+  
   Eigen::Vector3d position = x.segment(4, 3);
   Eigen::Vector3d velocity = x.segment(7, 3);
   Eigen::Vector3d gyro_bias = x.segment(10, 3);

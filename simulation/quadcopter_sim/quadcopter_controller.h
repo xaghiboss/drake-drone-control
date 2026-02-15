@@ -73,20 +73,19 @@ class QuadcopterController : public LeafSystem<double> {
   const double alpha_velocity_ = 0.9;
   const double altitude_deadband_ = 0.1;
   
-  // OUTER LOOP: Angle → Rate (REALISTIC VALUES)
-  const double kp_angle_roll_ = 15.0;    // Was 3.0 - NOW 5x HIGHER
-  const double kp_angle_pitch_ = 15.0;   // Was 3.0
-  const double kp_angle_yaw_ = 3.0;      // Was 1.0
+  const double kp_angle_roll_ = 25.0;    // Was 3.0 → 5x higher
+  const double kp_angle_pitch_ = 25.0;   // Was 3.0
+  const double kp_angle_yaw_ = 8.0;      // Was 1.0 → 8x higher (yaw needs MORE!)
   
-  // INNER LOOP: Rate → Torque (REALISTIC VALUES)
-  const double kp_rate_roll_ = 8.0;      // Was 1.2 - NOW 7x HIGHER
-  const double kd_rate_roll_ = 5.0;      // Was 0.6
+  // INNER LOOP: Rate → Torque (INCREASE THESE!)
+  const double kp_rate_roll_ = 12.0;      // Was 1.2
+  const double kd_rate_roll_ = 7.0;      // Was 0.6
   
-  const double kp_rate_pitch_ = 8.0;     // Was 1.2
-  const double kd_rate_pitch_ = 5.0;     // Was 0.6
+  const double kp_rate_pitch_ = 12.0;     // Was 1.2
+  const double kd_rate_pitch_ = 7.0;     // Was 0.6
   
-  const double kp_rate_yaw_ = 5.0;       // Was 3.0
-  const double kd_rate_yaw_ = 2.0;       // Was 1.0
+  const double kp_rate_yaw_ = 10.0;      // Was 3.0 → Need even higher for yaw!
+  const double kd_rate_yaw_ = 3.0;       // Was 1.0
   
   // Physical constants
   const double drone_mass_ = 0.5;

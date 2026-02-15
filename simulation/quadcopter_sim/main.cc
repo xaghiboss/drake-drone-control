@@ -280,13 +280,18 @@ int main() {
   
   double target_roll = 0;
   double target_pitch = 0;
-  double target_yaw = 0.0;
+  double target_yaw_rate = 0.0;  // deg/s
   
-  const double max_angle = 0.6;
+  const double max_angle = 0.9;
   const double angle_inc = 0.1;
+  const double decay_factor = 0.90;
   
   bool armed = false;
   bool running = true;
+
+  bool debug_mode = false;  // Toggle with 'd' key
+  int debug_counter = 0;     // Print every N iterations
+  const int debug_interval = 40;  // Print every 40 iterations (5Hz at 200Hz loop)
 
   // Control input vector: NOW 5 ELEMENTS! [altitude, roll, pitch, yaw, mode]
   Eigen::VectorXd control_input(5);
@@ -314,10 +319,25 @@ int main() {
       std::this_thread::sleep_for(std::chrono::milliseconds(150));
     }
 
-    // QUIT (unchanged)
+    // QUIT 
     if (key == 'q' || key == 'Q') {
       std::cout << "\nQuit requested." << std::endl;
       break;
+    }
+
+    // ========================================================================
+    // DEBUG TOGGLE
+    // ========================================================================
+    if (key == 'd' || key == 'D') {
+      debug_mode = !debug_mode;
+      if (debug_mode) {
+        std::cout << "\n*** DEBUG MODE ENABLED ***" << std::endl;
+        std::cout << "Pipeline trace will print every " 
+                  << debug_interval * dt << " seconds\n" << std::endl;
+      } else {
+        std::cout << "\n*** DEBUG MODE DISABLED ***\n" << std::endl;
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(150));
     }
 
     // ========================================================================
@@ -354,36 +374,57 @@ int main() {
     }
 
     // ========================================================================
-    // ANGLE CONTROL - DIRECT STICK MAPPING
+    // ANGLE CONTROL (i/k/j/l/u/o keys)
     // ========================================================================
     
-    double pitch_stick = 0.0;
-    double roll_stick = 0.0;
     
+    // Apply decay ONLY if no keys are pressed
+    bool pitch_key_pressed = (key == 'i' || key == 'I' || key == 'k' || key == 'K');
+    bool roll_key_pressed = (key == 'j' || key == 'J' || key == 'l' || key == 'L');
+    //bool yaw_key_pressed = (key == 'u' || key == 'U' || key == 'o' || key == 'O');
+    
+    if (!pitch_key_pressed && !roll_key_pressed) {
+      target_roll *= decay_factor;
+      target_pitch *= decay_factor;
+    }
+    
+    // User input in WORLD FRAME (what the pilot expects)
+    double world_forward = 0.0;
+    double world_right = 0.0;
+    
+    // Apply key inputs
     if (key == 'i' || key == 'I') {
-      pitch_stick = 1.0;
+      world_forward += angle_inc;
     } else if (key == 'k' || key == 'K') {
-      pitch_stick = -1.0;
+      world_forward -= angle_inc;
     }
 
     if (key == 'j' || key == 'J') {
-      roll_stick = -1.0;
+      world_right -= angle_inc;
     } else if (key == 'l' || key == 'L') {
-      roll_stick = 1.0;
+      world_right += angle_inc;
     }
-
-    target_pitch = pitch_stick * max_angle;
-    target_roll = roll_stick * max_angle;
-
-    // YAW CONTROL
+  
+    // === YAW CONTROL (Rate mode for yaw) ===
+    double target_yaw_rate = 0.0;  // rad/s
+    const double max_yaw_rate = 1.0;  // rad/s (~57°/s)
+    
     if (key == 'u' || key == 'U') {
-      target_yaw += angle_inc;
+      target_yaw_rate = max_yaw_rate;   // Yaw left
     } else if (key == 'o' || key == 'O') {
-      target_yaw -= angle_inc;
+      target_yaw_rate = -max_yaw_rate;  // Yaw right
     }
+  
     
     if (std::abs(target_roll) < 0.005) target_roll = 0.0;
     if (std::abs(target_pitch) < 0.005) target_pitch = 0.0;
+
+    target_pitch += world_forward - world_right;
+    target_roll += world_forward + world_right;
+
+    // Clamp to limits
+    target_pitch = std::clamp(target_pitch, -max_angle, max_angle);
+    target_roll = std::clamp(target_roll, -max_angle, max_angle);    
 
     // ========================================================================
     // BUILD CONTROL INPUT (5 ELEMENTS) - JUST COMMANDS
@@ -394,7 +435,7 @@ int main() {
       control_input(0) = hover_target_altitude;           // Target altitude
       control_input(1) = target_roll;                      // Target roll
       control_input(2) = target_pitch;                     // Target pitch
-      control_input(3) = target_yaw;                       // Target yaw
+      control_input(3) = target_yaw_rate;                       // Target yaw
       control_input(4) = auto_hover_enabled ? 1.0 : 0.0;  // Altitude mode
     }
 
@@ -404,45 +445,184 @@ int main() {
         drake::Value<drake::systems::BasicVector<double>>(
             drake::systems::BasicVector<double>(control_input)));
 
+    // // ========================================================================
+    // // ADVANCE SIMULATION
+    // // ========================================================================
+    // if (armed) {
+    //   simulator.AdvanceTo(sim_time + dt);
+    //   sim_time += dt;
+      
+    //   // Print status every 1 second
+    //   // Print status every 1 second
+    //   if (sim_time - last_print_time >= 1.0) {
+    //     // Read from EKF output (not IMU!) for status display
+    //     auto& ekf_context = diagram->GetSubsystemContext(*ekf, root_context);
+    //     const auto& ekf_output = ekf->get_output_port(0).Eval(ekf_context);
+        
+    //     // Parse EKF output: [quat(4), angular_vel(3), accel(3), pos(3)]
+    //     Eigen::Quaterniond quat(ekf_output(0), ekf_output(1), 
+    //                             ekf_output(2), ekf_output(3));
+    //     const math::RotationMatrix<double> R_WB(quat);
+    //     const math::RollPitchYaw<double> current_rpy(R_WB);
+    //     const double current_altitude = ekf_output(12);  // Position Z
+        
+    //     std::cout << "t=" << std::fixed << std::setprecision(1) << sim_time;
+        
+    //     if (auto_hover_enabled) {
+    //       std::cout << " [HOVER@" << std::setprecision(2) << hover_target_altitude << "m]";
+    //     }
+        
+    //     std::cout << " | Alt=" << std::setprecision(2) << current_altitude << "m"
+    //               << " | Angle=[" << std::setprecision(1)
+    //               << current_rpy.roll_angle()*57.3 << "°, " 
+    //               << current_rpy.pitch_angle()*57.3 << "°]" << std::endl;
+        
+    //     last_print_time = sim_time;
+    //   }
+    // } else {
+    //   diagram->ForcedPublish(root_context);
+    //   std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    // }
     // ========================================================================
+    // DEBUG LOGGING PIPELINE
+    // ========================================================================
+        // ========================================================================
     // ADVANCE SIMULATION
     // ========================================================================
     if (armed) {
-      simulator.AdvanceTo(sim_time + dt);
-      sim_time += dt;
-      
-      // Print status every 1 second
-      // Print status every 1 second
-      if (sim_time - last_print_time >= 1.0) {
-        // Read from EKF output (not IMU!) for status display
+      // MOVE DEBUG HERE - BEFORE AdvanceTo!
+      if (debug_mode && (debug_counter++ % debug_interval == 0)) {
+        // All the debug code goes here
+        std::cout << "\n========================================" << std::endl;
+        std::cout << "DEBUG TRACE @ t=" << std::fixed << std::setprecision(2) 
+                  << sim_time << "s" << std::endl;
+        std::cout << "========================================" << std::endl;
+        
+        // ====================================================================
+        // STAGE 0: GROUND TRUTH (from plant)
+        // ====================================================================
+        auto& current_plant_context = plant.GetMyMutableContextFromRoot(&root_context);
+        const math::RigidTransformd true_pose = 
+            plant.GetFreeBodyPose(current_plant_context, drone_body);
+        const math::RollPitchYaw<double> true_rpy(true_pose.rotation());
+        const Eigen::Vector3d true_pos = true_pose.translation();
+        
+        const multibody::SpatialVelocity<double> true_vel =
+            plant.EvalBodySpatialVelocityInWorld(current_plant_context, drone_body);
+        const Eigen::Vector3d true_angular_vel = true_vel.rotational();
+        const Eigen::Vector3d true_linear_vel = true_vel.translational();
+        
+        std::cout << "\n[0] GROUND TRUTH (Plant State):" << std::endl;
+        std::cout << "  Position:     [" << std::setw(6) << true_pos(0) 
+                  << ", " << std::setw(6) << true_pos(1) 
+                  << ", " << std::setw(6) << true_pos(2) << "] m" << std::endl;
+        std::cout << "  Orientation:  [" << std::setw(6) << true_rpy.roll_angle()*57.3
+                  << ", " << std::setw(6) << true_rpy.pitch_angle()*57.3
+                  << ", " << std::setw(6) << true_rpy.yaw_angle()*57.3 << "] deg" << std::endl;
+        std::cout << "  Lin Velocity: [" << std::setw(6) << true_linear_vel(0)
+                  << ", " << std::setw(6) << true_linear_vel(1)
+                  << ", " << std::setw(6) << true_linear_vel(2) << "] m/s" << std::endl;
+        std::cout << "  Ang Velocity: [" << std::setw(6) << true_angular_vel(0)*57.3
+                  << ", " << std::setw(6) << true_angular_vel(1)*57.3
+                  << ", " << std::setw(6) << true_angular_vel(2)*57.3 << "] deg/s" << std::endl;
+        
+        // ====================================================================
+        // STAGE 1: IMU RAW MEASUREMENTS
+        // ====================================================================
+        auto& imu_context = diagram->GetSubsystemContext(*imu, root_context);
+        const auto& imu_raw = imu->get_output_port(0).Eval(imu_context);
+        
+        std::cout << "\n[1] IMU RAW MEASUREMENTS:" << std::endl;
+        std::cout << "  Accelerometer: [" << std::setw(6) << imu_raw(0)
+                  << ", " << std::setw(6) << imu_raw(1)
+                  << ", " << std::setw(6) << imu_raw(2) << "] m/s²" << std::endl;
+        std::cout << "  Gyroscope:     [" << std::setw(6) << imu_raw(3)*57.3
+                  << ", " << std::setw(6) << imu_raw(4)*57.3
+                  << ", " << std::setw(6) << imu_raw(5)*57.3 << "] deg/s" << std::endl;
+        std::cout << "  Barometer Alt: " << std::setw(6) << imu_raw(6) << " m" << std::endl;
+        
+        // ====================================================================
+        // STAGE 2: EKF STATE ESTIMATE
+        // ====================================================================
         auto& ekf_context = diagram->GetSubsystemContext(*ekf, root_context);
         const auto& ekf_output = ekf->get_output_port(0).Eval(ekf_context);
         
-        // Parse EKF output: [quat(4), angular_vel(3), accel(3), pos(3)]
-        Eigen::Quaterniond quat(ekf_output(0), ekf_output(1), 
-                                ekf_output(2), ekf_output(3));
-        const math::RotationMatrix<double> R_WB(quat);
-        const math::RollPitchYaw<double> current_rpy(R_WB);
-        const double current_altitude = ekf_output(12);  // Position Z
+        Eigen::Quaterniond ekf_quat(ekf_output(0), ekf_output(1), 
+                                     ekf_output(2), ekf_output(3));
         
-        std::cout << "t=" << std::fixed << std::setprecision(1) << sim_time;
-        
-        if (auto_hover_enabled) {
-          std::cout << " [HOVER@" << std::setprecision(2) << hover_target_altitude << "m]";
+        // Safety check
+        math::RollPitchYaw<double> ekf_rpy(0, 0, 0);
+        if (ekf_quat.norm() > 0.1) {
+          ekf_quat.normalize();
+          const math::RotationMatrix<double> ekf_R_WB(ekf_quat);
+          ekf_rpy = math::RollPitchYaw<double>(ekf_R_WB);
         }
         
-        std::cout << " | Alt=" << std::setprecision(2) << current_altitude << "m"
-                  << " | Angle=[" << std::setprecision(1)
-                  << current_rpy.roll_angle()*57.3 << "°, " 
-                  << current_rpy.pitch_angle()*57.3 << "°]" << std::endl;
+        std::cout << "\n[2] EKF STATE ESTIMATE:" << std::endl;
+        std::cout << "  Quaternion:    [" << std::setw(6) << ekf_output(0)
+                  << ", " << std::setw(6) << ekf_output(1)
+                  << ", " << std::setw(6) << ekf_output(2)
+                  << ", " << std::setw(6) << ekf_output(3) << "]" << std::endl;
+        std::cout << "  Orientation:   [" << std::setw(6) << ekf_rpy.roll_angle()*57.3
+                  << ", " << std::setw(6) << ekf_rpy.pitch_angle()*57.3
+                  << ", " << std::setw(6) << ekf_rpy.yaw_angle()*57.3 << "] deg" << std::endl;
+        std::cout << "  Ang Velocity:  [" << std::setw(6) << ekf_output(4)*57.3
+                  << ", " << std::setw(6) << ekf_output(5)*57.3
+                  << ", " << std::setw(6) << ekf_output(6)*57.3 << "] deg/s" << std::endl;
+        std::cout << "  Acceleration:  [" << std::setw(6) << ekf_output(7)
+                  << ", " << std::setw(6) << ekf_output(8)
+                  << ", " << std::setw(6) << ekf_output(9) << "] m/s²" << std::endl;
+        std::cout << "  Position:      [" << std::setw(6) << ekf_output(10)
+                  << ", " << std::setw(6) << ekf_output(11)
+                  << ", " << std::setw(6) << ekf_output(12) << "] m" << std::endl;
         
-        last_print_time = sim_time;
+        // ====================================================================
+        // STAGE 3: USER INPUTS
+        // ====================================================================
+        std::cout << "\n[3] USER CONTROL INPUTS:" << std::endl;
+        std::cout << "  Target Altitude: " << hover_target_altitude << " m" << std::endl;
+        std::cout << "  Target Roll:     " << std::setw(6) << target_roll*57.3 << " deg" << std::endl;
+        std::cout << "  Target Pitch:    " << std::setw(6) << target_pitch*57.3 << " deg" << std::endl;
+        std::cout << "  Target Yaw Rate: " << std::setw(6) << target_yaw_rate << " deg" << std::endl;
+        std::cout << "  Altitude Mode:   " << (auto_hover_enabled ? "AUTO-HOVER" : "MANUAL") << std::endl;
+        
+        // ====================================================================
+        // STAGE 4: CONTROL ERRORS
+        // ====================================================================
+        const double altitude_error = hover_target_altitude - ekf_output(12);
+        const double roll_error = target_roll - ekf_rpy.roll_angle();
+        const double pitch_error = target_pitch - ekf_rpy.pitch_angle();
+        //const double yaw_error = target_yaw - ekf_rpy.yaw_angle();
+        
+        std::cout << "\n[4] CONTROL ERRORS (Target - Actual):" << std::endl;
+        std::cout << "  Altitude Error: " << std::setw(6) << altitude_error << " m" << std::endl;
+        std::cout << "  Roll Error:     " << std::setw(6) << roll_error*57.3 << " deg" << std::endl;
+        std::cout << "  Pitch Error:    " << std::setw(6) << pitch_error*57.3 << " deg" << std::endl;
+        
+        // ====================================================================
+        // STAGE 5: COMPARISON
+        // ====================================================================
+        std::cout << "\n[5] COMPARISON:" << std::endl;
+        std::cout << "  Position Error (EKF vs Truth): ["
+                  << std::setw(6) << (ekf_output(10) - true_pos(0))
+                  << ", " << std::setw(6) << (ekf_output(11) - true_pos(1))
+                  << ", " << std::setw(6) << (ekf_output(12) - true_pos(2)) << "] m" << std::endl;
+        std::cout << "  Orientation Error (EKF vs Truth): ["
+                  << std::setw(6) << (ekf_rpy.roll_angle() - true_rpy.roll_angle())*57.3
+                  << ", " << std::setw(6) << (ekf_rpy.pitch_angle() - true_rpy.pitch_angle())*57.3
+                  << ", " << std::setw(6) << (ekf_rpy.yaw_angle() - true_rpy.yaw_angle())*57.3 << "] deg" << std::endl;
+        
+        std::cout << "\n========================================\n" << std::endl;
       }
-    } else {
-      diagram->ForcedPublish(root_context);
-      std::this_thread::sleep_for(std::chrono::milliseconds(50));
+      
+      // NOW advance simulation AFTER debug print
+      simulator.AdvanceTo(sim_time + dt);
+      sim_time += dt;
+      
+      // ... rest of periodic status print code
     }
-  }
+  
+  }  
 
   std::cout << "\nSimulation stopped." << std::endl;
   
