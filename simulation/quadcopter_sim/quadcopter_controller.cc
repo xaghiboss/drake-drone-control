@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <functional>
+#include <iostream>
 
 #include "drake/common/eigen_types.h"
 #include "drake/math/rigid_transform.h"
@@ -93,6 +94,15 @@ void QuadcopterController::CalcSpatialForces(
   const double current_roll = rpy.roll_angle();
   const double current_pitch = rpy.pitch_angle();
   const double current_yaw = rpy.yaw_angle();
+
+  // After line 95 (extracting current angles), add:
+  static bool printed_initial = false;
+  if (!printed_initial) {
+    std::cout << "Initial orientation: roll=" << (current_roll * 57.3) 
+              << "° pitch=" << (current_pitch * 57.3) 
+              << "° yaw=" << (current_yaw * 57.3) << "°" << std::endl;
+    printed_initial = true;
+  }
   
   // Safety check: verify orientation is reasonable
   if (std::abs(current_roll) > M_PI / 2.5 || std::abs(current_pitch) > M_PI / 2.5) {
@@ -165,9 +175,12 @@ void QuadcopterController::CalcSpatialForces(
                                        - kd_altitude_ * vertical_velocity;
       
       total_thrust = base_thrust + altitude_correction;
-      
-      // Clamp (allow zero for landing!)
-      total_thrust = std::clamp(total_thrust, 0.0, hover_thrust_ * 1.5);
+
+      // CRITICAL: Never go below 80% hover thrust (need authority for attitude)
+      const double min_thrust = hover_thrust_ * 0.8;  // 3.92N minimum
+      const double max_thrust = hover_thrust_ * 1.5;  // 7.35N maximum
+
+      total_thrust = std::clamp(total_thrust, min_thrust, max_thrust);
     }
   } else {
     altitude_initialized_ = false;
@@ -183,13 +196,23 @@ void QuadcopterController::CalcSpatialForces(
   double pitch_error = target_pitch - current_pitch;
   double yaw_error = target_yaw - current_yaw;
   
+  // Accumulate integral (with anti-windup)
+  const double max_integral = 0.1;  // Limit integral accumulation
+  roll_error_integral_ += roll_error * 0.01;  // 0.01 = dt estimate
+  roll_error_integral_ = std::clamp(roll_error_integral_, -max_integral, max_integral);
+
+  pitch_error_integral_ += pitch_error * 0.01;
+  pitch_error_integral_ = std::clamp(pitch_error_integral_, -max_integral, max_integral);  
+
   // Normalize yaw error to [-π, π]
   while (yaw_error > M_PI) yaw_error -= 2.0 * M_PI;
   while (yaw_error < -M_PI) yaw_error += 2.0 * M_PI;
   
   // Outer loop: Convert angle errors to desired rates (P control)
-  const double desired_roll_rate = kp_angle_roll_ * roll_error;
-  const double desired_pitch_rate = kp_angle_pitch_ * pitch_error;
+  const double desired_roll_rate = kp_angle_roll_ * roll_error 
+                                  + ki_angle_roll_ * roll_error_integral_;
+  const double desired_pitch_rate = kp_angle_pitch_ * pitch_error 
+                                  + ki_angle_pitch_ * pitch_error_integral_;
   const double desired_yaw_rate = kp_angle_yaw_ * yaw_error;
   
   // ========================================================================
@@ -208,6 +231,20 @@ void QuadcopterController::CalcSpatialForces(
                             - kd_rate_pitch_ * current_pitch_rate;
   const double yaw_torque = kp_rate_yaw_ * yaw_rate_error 
                           - kd_rate_yaw_ * current_yaw_rate;
+
+  static int torque_debug = 0;
+if (torque_debug++ % 50 == 0) {
+  std::cout << "\n=== TORQUE DEBUG ===" << std::endl;
+  std::cout << "Angle errors: roll=" << roll_error*57.3 << "° pitch=" << pitch_error*57.3 << "°" << std::endl;
+  std::cout << "Desired rates: roll=" << desired_roll_rate*57.3 << "°/s pitch=" << desired_pitch_rate*57.3 << "°/s" << std::endl;
+  std::cout << "Current rates: roll=" << current_roll_rate*57.3 << "°/s pitch=" << current_pitch_rate*57.3 << "°/s" << std::endl;
+  std::cout << "Rate errors: roll=" << roll_rate_error*57.3 << "°/s pitch=" << pitch_rate_error*57.3 << "°/s" << std::endl;
+  std::cout << "Computed torques: roll=" << roll_torque << " Nm pitch=" << pitch_torque << " Nm" << std::endl;
+  std::cout << "Total thrust: " << total_thrust << " N" << std::endl;
+  std::cout << "Base per rotor: " << (total_thrust/4.0) << " N" << std::endl;
+  std::cout << "Pitch diff: " << (pitch_torque / (2.0 * 0.15)) << " N" << std::endl;
+  std::cout << "Roll diff: " << (roll_torque / (2.0 * 0.15)) << " N" << std::endl;
+}
   
   // ========================================================================
   // DIFFERENTIAL THRUST MIXING - REAL DRONE STYLE
@@ -227,6 +264,14 @@ void QuadcopterController::CalcSpatialForces(
   double f_red = base_thrust_per_rotor - pitch_diff + roll_diff;
   double f_yellow = base_thrust_per_rotor + pitch_diff - roll_diff;
   double f_green = base_thrust_per_rotor + pitch_diff + roll_diff;
+
+  static int motor_debug = 0;
+  if (motor_debug++ % 100 == 0) {
+    std::cout << "Motors: B=" << f_blue << " R=" << f_red 
+              << " Y=" << f_yellow << " G=" << f_green << std::endl;
+    std::cout << "Torques: roll=" << roll_torque << " pitch=" << pitch_torque << std::endl;
+    std::cout << "Angles: roll=" << (current_roll*57.3) << "° pitch=" << (current_pitch*57.3) << "°" << std::endl;
+  }
   
   // Clamp to physical limits
   const double max_single_rotor = total_thrust * 0.9;

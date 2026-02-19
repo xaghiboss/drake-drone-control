@@ -73,19 +73,20 @@ class QuadcopterController : public LeafSystem<double> {
   const double alpha_velocity_ = 0.9;
   const double altitude_deadband_ = 0.1;
   
-  const double kp_angle_roll_ = 25.0;    // Was 3.0 → 5x higher
-  const double kp_angle_pitch_ = 25.0;   // Was 3.0
-  const double kp_angle_yaw_ = 8.0;      // Was 1.0 → 8x higher (yaw needs MORE!)
-  
-  // INNER LOOP: Rate → Torque (INCREASE THESE!)
-  const double kp_rate_roll_ = 12.0;      // Was 1.2
-  const double kd_rate_roll_ = 7.0;      // Was 0.6
-  
-  const double kp_rate_pitch_ = 12.0;     // Was 1.2
-  const double kd_rate_pitch_ = 7.0;     // Was 0.6
-  
-  const double kp_rate_yaw_ = 10.0;      // Was 3.0 → Need even higher for yaw!
-  const double kd_rate_yaw_ = 3.0;       // Was 1.0
+  // OUTER LOOP: Angle → Desired Rate
+  const double kp_angle_roll_ = 3.0;    // Was 25.0 → REDUCE by 8x
+  const double kp_angle_pitch_ = 3.0;   // Was 25.0 → REDUCE by 8x
+  const double kp_angle_yaw_ = 1.5;     // Was 8.0 → REDUCE
+
+  // INNER LOOP: Rate → Torque
+  const double kp_rate_roll_ = 1.5;     // Was 12.0 → REDUCE by 8x
+  const double kd_rate_roll_ = 0.8;     // Was 7.0 → REDUCE
+
+  const double kp_rate_pitch_ = 1.5;    // Was 12.0 → REDUCE by 8x
+  const double kd_rate_pitch_ = 0.8;    // Was 7.0 → REDUCE
+
+  const double kp_rate_yaw_ = 2.0;      // Was 10.0 → REDUCE
+  const double kd_rate_yaw_ = 0.5;      // Was 3.0 → REDUCE
   
   // Physical constants
   const double drone_mass_ = 0.5;
@@ -98,6 +99,15 @@ class QuadcopterController : public LeafSystem<double> {
   mutable double filtered_altitude_ = 0.0;   // ← ADD: filtered altitude measurement
   mutable double filtered_velocity_ = 0.0;
   mutable bool altitude_initialized_ = false;
+
+  mutable double roll_error_integral_ = 0.0;
+  mutable double pitch_error_integral_ = 0.0;
+  
+  // Add gains:
+  const double ki_angle_roll_ = 2.0;   // Small I-gain
+  const double ki_angle_pitch_ = 1.0;
+
+  
 };
 
 }  // namespace systems
